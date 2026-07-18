@@ -1,0 +1,40 @@
+<mujoco model="foosball">
+
+    <compiler angle="degree" meshdir="./assets/" autolimits="true" eulerseq="xyz" />
+
+    <default>
+        <default class="table">
+            <geom contype="1" conaffinity="2" group="3" />
+        </default>
+        <default class="ball">
+            <geom contype="2" conaffinity="3" group="3"/>
+        </default>
+
+        <default class="visual">
+          <geom type="mesh" contype="0" conaffinity="0" group="2"/>
+        </default>
+    </default>
+
+    <asset>
+        <mesh name="base_mesh" file="base.obj" />
+    </asset>
+
+    <worldbody>
+        <body name="base" childclass="table" pos="0.0 0.0 0.0" euler="0.0 0.0 0.0">
+            <geom name="base_vis" type="mesh" class="visual" mesh="base_mesh" euler="0.0 0.0 90.0"/>
+            <geom name="base_floor" type="box" pos="0.0 0.0 0.228605" size="0.619765	0.3133595	0.0256993" />
+
+            <geom name="base_col_left_wall" type="box" pos="0.0 -0.325776 0.297165" size="0.55336 0.0138576 0.051112" />
+            <geom name="base_col_right_right_wall" type="box" pos="0.288518 0.325776 0.297165" size="0.27668	0.0138576	0.051112" />
+            <geom name="base_col_right_left_wall" type="box" pos="-0.305099 0.325776 0.297165" size="0.27668	0.0138576	0.051112" />
+            <geom name="base_col_right_top_wall" type="box" pos="-0.00874 0.325776 0.337944" size="0.02002595	0.0138576	0.01125425" />
+            <geom name="base_col_right_bot_wall" type="box" pos="-0.00874 0.325776 0.269701" size="0.0370646	0.0138576	0.01581445" />
+
+            <geom name="base_goal1_left_wall" type="box" pos="-0.549865 -0.226787 0.297165" size="0.0205989	0.0949165	0.05" />
+            <geom name="base_goal1_right_wall" type="box" pos="-0.549865 0.226787 0.297165" size="0.0205989	0.0949165	0.05" />
+
+            <geom name="base_goal2_left_wall" type="box" pos="0.56324 -0.226787 0.297165" size="0.0205989	0.0949165	0.05" />
+            <geom name="base_goal2_right_wall" type="box" pos="0.56324 0.226787 0.297165" size="0.0205989	0.0949165	0.05" />
+        </body>
+    </worldbody>
+</mujoco>
