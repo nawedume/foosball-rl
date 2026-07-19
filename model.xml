@@ -2,6 +2,10 @@
 
     <compiler angle="degree" meshdir="./assets/" autolimits="true" eulerseq="xyz" />
 
+    <visual>
+      <headlight ambient="0.7 0.7 0.7"/>
+    </visual>
+
     <default>
         <default class="table">
             <geom contype="1" conaffinity="2" group="3" />
@@ -17,11 +21,58 @@
 
     <asset>
         <mesh name="base_mesh" file="base.obj" />
+        <mesh name="blue_1" file="blue1.obj" />
+        <mesh name="blue_2" file="blue2.obj" />
+        <mesh name="blue_3" file="blue3.obj" />
+
+        <model name="player" file="player.xml" />
+
+        <material
+            name="soft_light_brown"
+            rgba="0.68 0.52 0.36 1"
+            specular="0.12"
+            shininess="0.35"/>
+
+        <material
+            name="cherry_red"
+            rgba="0.72 0.06 0.10 1"
+            specular="0.18"
+            shininess="0.30"/>
+
+        <material
+            name="navy_blue"
+            rgba="0.03 0.10 0.28 1"
+            specular="0.16"
+            shininess="0.28"/>
     </asset>
+
+    <actuator>
+        <motor name="blue1_sj_0_a" joint="blue1_sj0" gear="1" ctrlrange="-50 50" />
+        <motor name="blue1_sj_1_a" joint="blue1_sj1" gear="1" ctrlrange="-50 50" />
+        <motor name="blue1_h_0_a" joint="blue1_h0" gear="1" ctrlrange="-5.0 5.0" />
+        <motor name="blue1_h_1_a" joint="blue1_h1" gear="1" ctrlrange="-5.0 5.0" />
+
+        <motor name="blue2_sj_a" joint="blue2_sj" gear="1" ctrlrange="-50 50" />
+        <motor name="blue2_h_a" joint="blue2_h" gear="1" ctrlrange="-5.0 5.0" />
+
+        <motor name="blue3_sj_a" joint="blue3_sj" gear="1" ctrlrange="-50 50" />
+        <motor name="blue3_h_a" joint="blue3_h" gear="1" ctrlrange="-5.0 5.0" />
+
+        <motor name="red1_sj_0_a" joint="red1_sj0" gear="1" ctrlrange="-50 50" />
+        <motor name="red1_sj_1_a" joint="red1_sj1" gear="1" ctrlrange="-50 50" />
+        <motor name="red1_h_0_a" joint="red1_h0" gear="1" ctrlrange="-5.0 5.0" />
+        <motor name="red1_h_1_a" joint="red1_h1" gear="1" ctrlrange="-5.0 5.0" />
+
+        <motor name="red2_sj_a" joint="red2_sj" gear="1" ctrlrange="-50 50" />
+        <motor name="red2_h_a" joint="red2_h" gear="1" ctrlrange="-5.0 5.0" />
+
+        <motor name="red3_sj_a" joint="red3_sj" gear="1" ctrlrange="-50 50" />
+        <motor name="red3_h_a" joint="red3_h" gear="1" ctrlrange="-5.0 5.0" />
+    </actuator>
 
     <worldbody>
         <body name="base" childclass="table" pos="0.0 0.0 0.0" euler="0.0 0.0 0.0">
-            <geom name="base_vis" type="mesh" class="visual" mesh="base_mesh" euler="0.0 0.0 90.0"/>
+            <geom name="base_vis" type="mesh" class="visual" mesh="base_mesh" euler="0.0 0.0 90.0" material="soft_light_brown" />
             <geom name="base_floor" type="box" pos="0.0 0.0 0.228605" size="0.619765	0.3133595	0.0256993" />
 
             <geom name="base_col_left_wall" type="box" pos="0.0 -0.325776 0.297165" size="0.55336 0.0138576 0.051112" />
@@ -35,6 +86,123 @@
 
             <geom name="base_goal2_left_wall" type="box" pos="0.56324 -0.226787 0.297165" size="0.0205989	0.0949165	0.05" />
             <geom name="base_goal2_right_wall" type="box" pos="0.56324 0.226787 0.297165" size="0.0205989	0.0949165	0.05" />
+
+            <!--  Could use replicate to rotate the reds to be a mirror image of the blues, but that will mean they'll have the same material in this model, easier to just copy and rotate-->
+            <replicate count="2" offset="-0.656321 0.0 0.0">
+                <body name="blue_1" euler="0.0 0.0 90.0" pos="0.448323 0.198511 0.302471">
+                    <geom name="blue_1_vis" type="mesh" class="visual" mesh="blue_1" material="navy_blue" />
+
+                    <body pos="0.076053 0.0 -0.021674">
+                        <attach model="player" body="player" prefix="b1a" />
+                    </body>
+                    <body pos="-0.080805 0.0 -0.021674">
+                        <attach model="player" body="player" prefix="b1b" />
+                    </body>
+                    <body pos="-0.228412 0.0 -0.021674">
+                        <attach model="player" body="player" prefix="b1c" />
+                    </body>
+
+                    <joint name="blue1_sj" type="slide" axis="1.0 0.0 0.0" range="-0.247939 0.0" damping="0.01" frictionloss="0.003" />
+                    <joint name="blue1_h" type="hinge" axis="1.0 0.0 0.0" pos="0.0 0.0 0.012233" damping="0.01" frictionloss="0.002" armature="0.01" range="-135 135" />
+
+                </body>
+            </replicate>
+
+            <body name="blue_2" euler="0.0 0.0 90.0" pos="0.319917 0.245792 0.302471">
+                <geom name="blue_2_vis" type="mesh" class="visual" mesh="blue_2" material="navy_blue" />
+
+                <body pos="0.032212 0.0 -0.021674">
+                    <attach model="player" body="player" prefix="b2a" />
+                </body>
+                <body pos="-0.195161 0.0 -0.021674">
+                    <attach model="player" body="player" prefix="b2b" />
+                </body>
+
+                <joint name="blue2_sj" type="slide" axis="1.0 0.0 0.0" range="-0.32569 0.0" damping="0.01" frictionloss="0.003" />
+                <joint name="blue2_h" type="hinge" axis="1.0 0.0 0.0" pos="0.0 0.0 0.012233" damping="0.01" frictionloss="0.002" armature="0.01" range="-135 135" />
+            </body>
+
+            <body name="blue_3" euler="0.0 0.0 90.0" pos="0.067426 0.110197 0.302471">
+                <geom name="blue_3_vis" type="mesh" class="visual" mesh="blue_3" material="navy_blue" />
+
+                <body pos="0.165844 0.0 -0.021674">
+                    <attach model="player" body="player" prefix="b3a" />
+                </body>
+                <body pos="0.043694 0.0 -0.021674">
+                    <attach model="player" body="player" prefix="b3b" />
+                </body>
+                <body pos="-0.080464 0.0 -0.021674">
+                    <attach model="player" body="player" prefix="b3c" />
+                </body>
+                <body pos="-0.201617 0.0 -0.021674">
+                    <attach model="player" body="player" prefix="b3d" />
+                </body>
+                <body pos="-0.310409 0.0 -0.021674">
+                    <attach model="player" body="player" prefix="b3e" />
+                </body>
+
+                <joint name="blue3_sj" type="slide" axis="1.0 0.0 0.0" range="-0.074541 0.0" damping="0.01" frictionloss="0.003" />
+                <joint name="blue3_h" type="hinge" axis="1.0 0.0 0.0" pos="0.0 0.0 0.012233" damping="0.01" frictionloss="0.002" armature="0.01" range="-135 135" />
+            </body>
+
+            <!-- red people -->
+            <body euler="0.0 0.0 180.0">
+                <replicate count="2" offset="-0.656321 0.0 0.0">
+                    <body name="red_1" euler="0.0 0.0 90.0" pos="0.448323 0.198511 0.302471">
+                        <geom name="red_1_vis" type="mesh" class="visual" mesh="blue_1" material="cherry_red" />
+
+                        <body pos="0.076053 0.0 -0.021674">
+                            <attach model="player" body="player" prefix="r1a" />
+                        </body>
+                        <body pos="-0.080805 0.0 -0.021674">
+                            <attach model="player" body="player" prefix="r1b" />
+                        </body>
+                        <body pos="-0.228412 0.0 -0.021674">
+                            <attach model="player" body="player" prefix="r1c" />
+                        </body>
+
+                        <joint name="red1_sj" type="slide" axis="1.0 0.0 0.0" range="-0.247939 0.0" damping="0.01" frictionloss="0.003" />
+                        <joint name="red1_h" type="hinge" axis="1.0 0.0 0.0" pos="0.0 0.0 0.012233" damping="0.01" frictionloss="0.002" armature="0.01" range="-135 135" />
+                    </body>
+                </replicate>
+
+                <body name="red_2" euler="0.0 0.0 90.0" pos="0.319917 0.245792 0.302471">
+                    <geom name="red_2_vis" type="mesh" class="visual" mesh="blue_2" material="cherry_red" />
+
+                    <body pos="0.032212 0.0 -0.021674">
+                        <attach model="player" body="player" prefix="r2a" />
+                    </body>
+                    <body pos="-0.195161 0.0 -0.021674">
+                        <attach model="player" body="player" prefix="r2b" />
+                    </body>
+
+                    <joint name="red2_sj" type="slide" axis="1.0 0.0 0.0" range="-0.32569 0.0" damping="0.01" frictionloss="0.003" />
+                    <joint name="red2_h" type="hinge" axis="1.0 0.0 0.0" pos="0.0 0.0 0.012233" damping="0.01" frictionloss="0.002" armature="0.01" range="-135 135" />
+                </body>
+
+                <body name="red_3" euler="0.0 0.0 90.0" pos="0.067426 0.110197 0.302471">
+                    <geom name="red_3_vis" type="mesh" class="visual" mesh="blue_3" material="cherry_red" />
+
+                    <body pos="0.165844 0.0 -0.021674">
+                        <attach model="player" body="player" prefix="r3a" />
+                    </body>
+                    <body pos="0.043694 0.0 -0.021674">
+                        <attach model="player" body="player" prefix="r3b" />
+                    </body>
+                    <body pos="-0.080464 0.0 -0.021674">
+                        <attach model="player" body="player" prefix="r3c" />
+                    </body>
+                    <body pos="-0.201617 0.0 -0.021674">
+                        <attach model="player" body="player" prefix="r3d" />
+                    </body>
+                    <body pos="-0.310409 0.0 -0.021674">
+                        <attach model="player" body="player" prefix="r3e" />
+                    </body>
+
+                    <joint name="red3_sj" type="slide" axis="1.0 0.0 0.0" range="-0.074541 0.0" damping="0.01" frictionloss="0.003" />
+                    <joint name="red3_h" type="hinge" axis="1.0 0.0 0.0" pos="0.0 0.0 0.012233" damping="0.01" frictionloss="0.002" armature="0.01" range="-135 135" />
+                </body>
+            </body>
         </body>
     </worldbody>
 </mujoco>

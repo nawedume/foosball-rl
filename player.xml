@@ -1,0 +1,23 @@
+<mujoco model="player">
+    <compiler angle="degree" meshdir="./assets/" autolimits="true" eulerseq="xyz" />
+
+    <!-- Don't need visuals since those on the rod, just replicate the simplified collider geometry -->
+    <default>
+        <default class="player">
+            <geom contype="1" conaffinity="2" group="3" />
+        </default>
+    </default>
+
+    <asset>
+        <mesh name="bottom_mesh" file="bot.obj" />
+    </asset>
+
+    <worldbody>
+        <body name="player" childclass="player">
+            <geom name="torso" type="box" pos="0.0 0.0 0.013891" size="0.00972235	0.01047435	0.0067634" />
+            <geom name="waist" type="box" pos="0.0 0.0 0.000399" size="0.00678915	0.00731425	0.00205485" />
+            <geom name="bottom" type="mesh" mesh="bottom_mesh" pos="0.0 0.0 0.0" />
+        </body>
+    </worldbody>
+
+</mujoco>
