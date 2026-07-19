@@ -10,6 +10,10 @@
         <default class="table">
             <geom contype="1" conaffinity="2" group="3" />
         </default>
+        <default class="rod">
+            <geom contype="1" conaffinity="2" group="3" type="cylinder" size="0.01 0.3" density="200" shellinertia="true" />
+        </default>
+
         <default class="ball">
             <geom contype="2" conaffinity="3" group="3"/>
         </default>
@@ -44,30 +48,47 @@
             rgba="0.03 0.10 0.28 1"
             specular="0.16"
             shininess="0.28"/>
-    </asset>
+
+        <texture
+            name="checker_texture"
+            type="2d"
+            builtin="checker"
+            rgb1="0.15 0.15 0.15"
+            rgb2="0.85 0.85 0.85"
+            width="512"
+            height="512"
+        />
+
+        <material
+            name="checker_material"
+            texture="checker_texture"
+            texrepeat="10 10"
+            texuniform="true"
+        />
+        </asset>
 
     <actuator>
         <motor name="blue1_sj_0_a" joint="blue1_sj0" gear="1" ctrlrange="-50 50" />
         <motor name="blue1_sj_1_a" joint="blue1_sj1" gear="1" ctrlrange="-50 50" />
-        <motor name="blue1_h_0_a" joint="blue1_h0" gear="1" ctrlrange="-5.0 5.0" />
-        <motor name="blue1_h_1_a" joint="blue1_h1" gear="1" ctrlrange="-5.0 5.0" />
+        <motor name="blue1_h_0_a" joint="blue1_h0" gear="1" ctrlrange="-20.0 20.0" />
+        <motor name="blue1_h_1_a" joint="blue1_h1" gear="1" ctrlrange="-20.0 20.0" />
 
         <motor name="blue2_sj_a" joint="blue2_sj" gear="1" ctrlrange="-50 50" />
-        <motor name="blue2_h_a" joint="blue2_h" gear="1" ctrlrange="-5.0 5.0" />
+        <motor name="blue2_h_a" joint="blue2_h" gear="1" ctrlrange="-20.0 20.0" />
 
         <motor name="blue3_sj_a" joint="blue3_sj" gear="1" ctrlrange="-50 50" />
-        <motor name="blue3_h_a" joint="blue3_h" gear="1" ctrlrange="-5.0 5.0" />
+        <motor name="blue3_h_a" joint="blue3_h" gear="1" ctrlrange="-20.0 20.0" />
 
         <motor name="red1_sj_0_a" joint="red1_sj0" gear="1" ctrlrange="-50 50" />
         <motor name="red1_sj_1_a" joint="red1_sj1" gear="1" ctrlrange="-50 50" />
-        <motor name="red1_h_0_a" joint="red1_h0" gear="1" ctrlrange="-5.0 5.0" />
-        <motor name="red1_h_1_a" joint="red1_h1" gear="1" ctrlrange="-5.0 5.0" />
+        <motor name="red1_h_0_a" joint="red1_h0" gear="1" ctrlrange="-20.0 20.0" />
+        <motor name="red1_h_1_a" joint="red1_h1" gear="1" ctrlrange="-20.0 20.0" />
 
         <motor name="red2_sj_a" joint="red2_sj" gear="1" ctrlrange="-50 50" />
-        <motor name="red2_h_a" joint="red2_h" gear="1" ctrlrange="-5.0 5.0" />
+        <motor name="red2_h_a" joint="red2_h" gear="1" ctrlrange="-20.0 20.0" />
 
         <motor name="red3_sj_a" joint="red3_sj" gear="1" ctrlrange="-50 50" />
-        <motor name="red3_h_a" joint="red3_h" gear="1" ctrlrange="-5.0 5.0" />
+        <motor name="red3_h_a" joint="red3_h" gear="1" ctrlrange="-20.0 20.0" />
     </actuator>
 
     <worldbody>
@@ -91,6 +112,7 @@
             <replicate count="2" offset="-0.656321 0.0 0.0">
                 <body name="blue_1" euler="0.0 0.0 90.0" pos="0.448323 0.198511 0.302471">
                     <geom name="blue_1_vis" type="mesh" class="visual" mesh="blue_1" material="navy_blue" />
+                    <geom class="rod" />
 
                     <body pos="0.076053 0.0 -0.021674">
                         <attach model="player" body="player" prefix="b1a" />
@@ -110,6 +132,7 @@
 
             <body name="blue_2" euler="0.0 0.0 90.0" pos="0.319917 0.245792 0.302471">
                 <geom name="blue_2_vis" type="mesh" class="visual" mesh="blue_2" material="navy_blue" />
+                <geom class="rod" />
 
                 <body pos="0.032212 0.0 -0.021674">
                     <attach model="player" body="player" prefix="b2a" />
@@ -124,6 +147,7 @@
 
             <body name="blue_3" euler="0.0 0.0 90.0" pos="0.067426 0.110197 0.302471">
                 <geom name="blue_3_vis" type="mesh" class="visual" mesh="blue_3" material="navy_blue" />
+                <geom class="rod" />
 
                 <body pos="0.165844 0.0 -0.021674">
                     <attach model="player" body="player" prefix="b3a" />
@@ -150,6 +174,7 @@
                 <replicate count="2" offset="-0.656321 0.0 0.0">
                     <body name="red_1" euler="0.0 0.0 90.0" pos="0.448323 0.198511 0.302471">
                         <geom name="red_1_vis" type="mesh" class="visual" mesh="blue_1" material="cherry_red" />
+                        <geom class="rod" />
 
                         <body pos="0.076053 0.0 -0.021674">
                             <attach model="player" body="player" prefix="r1a" />
@@ -168,6 +193,7 @@
 
                 <body name="red_2" euler="0.0 0.0 90.0" pos="0.319917 0.245792 0.302471">
                     <geom name="red_2_vis" type="mesh" class="visual" mesh="blue_2" material="cherry_red" />
+                    <geom class="rod" />
 
                     <body pos="0.032212 0.0 -0.021674">
                         <attach model="player" body="player" prefix="r2a" />
@@ -182,6 +208,7 @@
 
                 <body name="red_3" euler="0.0 0.0 90.0" pos="0.067426 0.110197 0.302471">
                     <geom name="red_3_vis" type="mesh" class="visual" mesh="blue_3" material="cherry_red" />
+                    <geom class="rod" />
 
                     <body pos="0.165844 0.0 -0.021674">
                         <attach model="player" body="player" prefix="r3a" />
@@ -204,5 +231,13 @@
                 </body>
             </body>
         </body>
+
+        <!-- The ball for the table -->
+        <body name="ball" pos="0.02 0.02 0.305539">
+            <geom name="ball_vis" type="sphere" size="0.02" class="visual" material="checker_material" />
+            <geom name="ball_coll" type="sphere" size="0.02" class="ball" mass="0.02" />
+            <freejoint />
+        </body>
+
     </worldbody>
 </mujoco>
