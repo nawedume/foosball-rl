@@ -31,7 +31,7 @@ class FoosballEnv(VecEnv):
         self.num_actions = 8
 
         # 1 minute worth of steps
-        self.max_episode_length = int(60 / dt)
+        self.max_episode_length = int(60 / dt) // 2
         self.episode_length_buf = torch.zeros(num_envs, dtype=torch.long, device=device)
 
         self.device = device
@@ -86,7 +86,6 @@ class FoosballEnv(VecEnv):
             self.mjm, mujoco.mjtObj.mjOBJ_BODY, "red_3"  # pyright: ignore[reportAttributeAccessIssue]
         )
 
-
         blue_goal_sensor_id = mujoco.mj_name2id(  # pyright: ignore[reportAttributeAccessIssue]
             self.mjm, mujoco.mjtObj.mjOBJ_SENSOR,  # pyright: ignore[reportAttributeAccessIssue]
             "blue_goal_reached"
@@ -107,6 +106,8 @@ class FoosballEnv(VecEnv):
         self.side = torch.zeros((self.num_envs), dtype=torch.int8)
 
         self.goal_reward = 100.0
+
+        self._reset(None)
 
 
     def get_observations(self) -> TensorDict:
@@ -167,9 +168,8 @@ class FoosballEnv(VecEnv):
         self.episode_length_buf[dones] = 0
 
         # TODO: reset environments
-        env_reset_indices = dones.nonzero()
-        if env_reset_indices.shape[0] != 0:
-            self._reset(env_reset_indices)
+        if dones.any():
+            self._reset(dones)
 
         obs = self.get_observations()
 
@@ -195,16 +195,23 @@ class FoosballEnv(VecEnv):
         return obs, rewards, dones, {}
 
 
-    def _reset(self, idx: torch.Tensor | None = None):
-        if idx is None:
-            ids = slice(None)
+    def _reset(self, dones: torch.Tensor | None = None):
+        if dones is None:
+            env_idx = slice(None)
+            self.side[env_idx] = torch.randint(0, 2, size=(self.num_envs, ), dtype=torch.uint8)
             size = self.num_envs
+
         else:
-            ids = idx
-            size = idx.shape[0]
+            size = int(dones.sum().item())
+            self.side[dones] = torch.randint(0, 2, size=(size, ), dtype=torch.uint8)
+            mjw.reset_data(self.model_d, self.data_d, reset=wp.from_torch(dones))
+            env_idx = dones
 
-        self.side[ids] = torch.randint(0, 2, size=(size, ), dtype=torch.uint8)
-
+        ball_vel = wp.to_torch(self.data_d.qvel)[:, 16:]
+        ball_vel[env_idx, 0] = (torch.rand((size, 1), device=self.device) - 0.5) * 0.1
+        ball_vel[env_idx, 1] = -torch.rand((size, 1), device=self.device) * 2.0
+        # should not advance time
+        mjw.forward(self.model_d, self.data_d)
 
     def get_sim_data(self):
         mjw.get_data_into(result=self.mjd, mjm=self.mjm, d=self.data_d)
