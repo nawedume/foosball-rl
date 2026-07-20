@@ -148,7 +148,12 @@ class FoosballEnv(VecEnv):
 
 
     def step(self, actions: torch.Tensor) -> tuple[TensorDict, torch.Tensor, torch.Tensor, dict]:
-        # TODO: use actions
+
+        control = wp.to_torch(self.data_d.ctrl)
+        assert control.shape[1] == 16
+        assert control.shape == actions.shape
+        control[:] = actions
+
         mjw.step(self.model_d, self.data_d)
 
         # Do I need this here if we just launch GPU kernels? Probably not remove later.

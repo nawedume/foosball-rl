@@ -16,7 +16,9 @@ with m_viewer.launch_passive(env.mjm, env.mjd) as viewer:
     while viewer.is_running():
         start = time.time()
 
-        env.step(torch.zeros(1, device=device))
+        actions = torch.sin(env.episode_length_buf * 0.1).unsqueeze(1).repeat(1, 16) * 20.0
+        assert actions.shape == (env.num_envs, 16)
+        env.step(actions)
 
         viewer.sync()
 
