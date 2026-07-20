@@ -16,6 +16,9 @@
         <body name="player" childclass="player">
             <geom name="torso" type="box" pos="0.0 0.0 0.013891" size="0.00972235	0.01047435	0.0067634" density="1500" />
             <geom name="waist" type="box" pos="0.0 0.0 0.000399" size="0.00678915	0.00731425	0.00205485" density="1500" />
+            <!-- <geom name="bottom" type="box" pos="0.0 0.0 -0.015092" size="0.009 0.0065 0.009" density="1500" /> -->
+
+            <!-- Can't use meshes here since 1070 ti can't suppor the general warp kernel for convex collisions -->
             <geom name="bottom" type="mesh" mesh="bottom_mesh" pos="0.0 0.0 0.0" density="1500" />
         </body>
     </worldbody>

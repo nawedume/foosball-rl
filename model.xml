@@ -11,7 +11,7 @@
             <geom contype="1" conaffinity="2" group="3" />
         </default>
         <default class="rod">
-            <geom contype="1" conaffinity="2" group="3" type="cylinder" size="0.01 0.3" density="200" shellinertia="true" />
+            <geom contype="1" conaffinity="2" group="3" type="cylinder" size="0.01 0.6" density="200" shellinertia="true" euler="0.0 90.0 0.0" pos="0.0 0.0 0.012233" />
         </default>
 
         <default class="ball">
@@ -65,34 +65,64 @@
             texrepeat="10 10"
             texuniform="true"
         />
-        </asset>
+    </asset>
 
     <actuator>
         <motor name="blue1_sj_0_a" joint="blue1_sj0" gear="1" ctrlrange="-50 50" />
         <motor name="blue1_sj_1_a" joint="blue1_sj1" gear="1" ctrlrange="-50 50" />
-        <motor name="blue1_h_0_a" joint="blue1_h0" gear="1" ctrlrange="-20.0 20.0" />
-        <motor name="blue1_h_1_a" joint="blue1_h1" gear="1" ctrlrange="-20.0 20.0" />
+        <motor name="blue1_h_0_a" joint="blue1_h0" gear="1" ctrlrange="-40.0 40.0" />
+        <motor name="blue1_h_1_a" joint="blue1_h1" gear="1" ctrlrange="-40.0 40.0" />
 
         <motor name="blue2_sj_a" joint="blue2_sj" gear="1" ctrlrange="-50 50" />
-        <motor name="blue2_h_a" joint="blue2_h" gear="1" ctrlrange="-20.0 20.0" />
+        <motor name="blue2_h_a" joint="blue2_h" gear="1" ctrlrange="-40.0 40.0" />
 
         <motor name="blue3_sj_a" joint="blue3_sj" gear="1" ctrlrange="-50 50" />
-        <motor name="blue3_h_a" joint="blue3_h" gear="1" ctrlrange="-20.0 20.0" />
+        <motor name="blue3_h_a" joint="blue3_h" gear="1" ctrlrange="-40.0 40.0" />
 
         <motor name="red1_sj_0_a" joint="red1_sj0" gear="1" ctrlrange="-50 50" />
         <motor name="red1_sj_1_a" joint="red1_sj1" gear="1" ctrlrange="-50 50" />
-        <motor name="red1_h_0_a" joint="red1_h0" gear="1" ctrlrange="-20.0 20.0" />
-        <motor name="red1_h_1_a" joint="red1_h1" gear="1" ctrlrange="-20.0 20.0" />
+        <motor name="red1_h_0_a" joint="red1_h0" gear="1" ctrlrange="-40.0 40.0" />
+        <motor name="red1_h_1_a" joint="red1_h1" gear="1" ctrlrange="-40.0 40.0" />
 
         <motor name="red2_sj_a" joint="red2_sj" gear="1" ctrlrange="-50 50" />
-        <motor name="red2_h_a" joint="red2_h" gear="1" ctrlrange="-20.0 20.0" />
+        <motor name="red2_h_a" joint="red2_h" gear="1" ctrlrange="-40.0 40.0" />
 
         <motor name="red3_sj_a" joint="red3_sj" gear="1" ctrlrange="-50 50" />
-        <motor name="red3_h_a" joint="red3_h" gear="1" ctrlrange="-20.0 20.0" />
+        <motor name="red3_h_a" joint="red3_h" gear="1" ctrlrange="-40.0 40.0" />
     </actuator>
+
+
+    <sensor>
+        <insidesite
+            name="blue_goal_reached"
+            site="blue_goal_zone"
+            objtype="geom"
+            objname="ball_coll"
+        />
+        <insidesite
+            name="red_goal_reached"
+            site="red_goal_zone"
+            objtype="geom"
+            objname="ball_coll"
+        />
+    </sensor>
 
     <worldbody>
         <body name="base" childclass="table" pos="0.0 0.0 0.0" euler="0.0 0.0 0.0">
+            <site name="blue_goal_zone"
+                type="box"
+                pos="0.593284 0.0 0.289419"
+                size="0.04 0.15 0.06"
+                rgba="0.0 0.0 1.0 0.5"
+            />
+
+            <site name="red_goal_zone"
+                type="box"
+                pos="-0.580284 0.0 0.289419"
+                size="0.04 0.15 0.06"
+                rgba="1.0 0.0 0.0 0.5"
+            />
+
             <geom name="base_vis" type="mesh" class="visual" mesh="base_mesh" euler="0.0 0.0 90.0" material="soft_light_brown" />
             <geom name="base_floor" type="box" pos="0.0 0.0 0.228605" size="0.619765	0.3133595	0.0256993" />
 
@@ -236,7 +266,7 @@
         <body name="ball" pos="0.02 0.02 0.305539">
             <geom name="ball_vis" type="sphere" size="0.02" class="visual" material="checker_material" />
             <geom name="ball_coll" type="sphere" size="0.02" class="ball" mass="0.02" />
-            <freejoint />
+            <freejoint name="ballfj" />
         </body>
 
     </worldbody>

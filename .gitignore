@@ -8,3 +8,10 @@ wheels/
 
 # Virtual environments
 .venv
+
+# mujoco
+MUJOCO_LOG.TXT
+
+# editors
+.zed/
+.vscode/
