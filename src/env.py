@@ -29,7 +29,8 @@ class FoosballEnv(VecEnv):
         # for each 4 rods, we can rotate and slide, 4x2 = 8 actions.
         # should output torques and forces for the motoros. See model.xml for definitions of actuators.
         self.num_actions = 8
-
+        self.num_obs = 46
+        self.num_privileged_obs = 46
         # 1 minute worth of steps
         self.max_episode_length = int(60 / dt) // 2
         self.episode_length_buf = torch.zeros(num_envs, dtype=torch.long, device=device)
@@ -103,7 +104,7 @@ class FoosballEnv(VecEnv):
         self.blue_goal_center = torch.tensor(GOAL_CENTER_BLUE, device=self.device).unsqueeze(0)
         self.red_goal_center = torch.tensor(GOAL_CENTER_RED, device=self.device).unsqueeze(0)
 
-        self.side = torch.zeros((self.num_envs), dtype=torch.int8)
+        self.side = torch.zeros((self.num_envs), dtype=torch.int8, device=self.device)
 
         self.goal_reward = 100.0
 
@@ -124,7 +125,7 @@ class FoosballEnv(VecEnv):
         is_red = self.side == 1
 
         ball_pos_rel = q_pos[:, 16:]
-        ball_pos_rel[:, :3] = torch.where(is_red, ball_pos_rel[:, 3] - self.red_goal_center, ball_pos_rel[:, 3] - self.blue_goal_center)
+        ball_pos_rel[:, :3] = torch.where(is_red.unsqueeze(1), ball_pos_rel[:, :3] - self.red_goal_center, ball_pos_rel[:, :3] - self.blue_goal_center)
 
         # reverse the direction so its always from the perspective of the current player
         ball_vel_rel = q_vel[:, 16:]
@@ -138,8 +139,8 @@ class FoosballEnv(VecEnv):
         red_vel = q_vel[:, 8:16]
         red_state = torch.cat([red_pos, red_vel], dim=-1)
 
-        player_rod_state = torch.where(is_red, red_state, blue_state)
-        op_rod_state = torch.where(is_red, blue_state, red_state)
+        player_rod_state = torch.where(is_red.unsqueeze(1), red_state, blue_state)
+        op_rod_state = torch.where(is_red.unsqueeze(1), blue_state, red_state)
 
         data = torch.cat([player_rod_state, op_rod_state, ball_pos_rel, ball_vel_rel, self.side.to(torch.float).unsqueeze(1)], dim=1)
 
@@ -147,12 +148,16 @@ class FoosballEnv(VecEnv):
         return TensorDict(ret, batch_size=[self.num_envs], device=self.device)
 
 
-    def step(self, actions: torch.Tensor) -> tuple[TensorDict, torch.Tensor, torch.Tensor, dict]:
+    def step(self, actions: torch.Tensor) -> tuple[TensorDict,torch.Tensor, torch.Tensor, torch.Tensor, dict]:
 
         control = wp.to_torch(self.data_d.ctrl)
         assert control.shape[1] == 16
-        assert control.shape == actions.shape
-        control[:] = actions
+        assert actions.shape[1] == 8
+
+        control.zero_()
+        is_red = self.side == 1
+        control[~is_red, :8] = actions[~is_red]
+        control[is_red, 8:] = actions[is_red]
 
         mjw.step(self.model_d, self.data_d)
 
@@ -182,9 +187,9 @@ class FoosballEnv(VecEnv):
         in_goal = blue_goals | red_goals
         goal_side = self.side[in_goal]
 
-        in_right_goal = ((goal_side == 0) & blue_goals) | ((goal_side == 1) & red_goals)
+        in_right_goal = ((self.side == 0) & blue_goals) | ((self.side == 1) & red_goals)
         rewards = torch.zeros(self.num_envs,  device=self.device)
-        rewards[in_goal] = torch.where(in_right_goal, self.goal_reward, -self.goal_reward)
+        rewards[in_goal] = torch.where(in_right_goal[in_goal], self.goal_reward, -self.goal_reward)
 
         # add distance reward
         # goal pivot is is (1 x 3), and the ball_pos is of sice (N, 3).
@@ -203,18 +208,18 @@ class FoosballEnv(VecEnv):
     def _reset(self, dones: torch.Tensor | None = None):
         if dones is None:
             env_idx = slice(None)
-            self.side[env_idx] = torch.randint(0, 2, size=(self.num_envs, ), dtype=torch.uint8)
+            self.side[env_idx] = torch.randint(0, 2, size=(self.num_envs, ), dtype=torch.int8, device=self.device)
             size = self.num_envs
 
         else:
             size = int(dones.sum().item())
-            self.side[dones] = torch.randint(0, 2, size=(size, ), dtype=torch.uint8)
+            self.side[dones] = torch.randint(0, 2, size=(size, ), dtype=torch.int8, device=self.device)
             mjw.reset_data(self.model_d, self.data_d, reset=wp.from_torch(dones))
             env_idx = dones
 
         ball_vel = wp.to_torch(self.data_d.qvel)[:, 16:]
-        ball_vel[env_idx, 0] = (torch.rand((size, 1), device=self.device) - 0.5) * 0.1
-        ball_vel[env_idx, 1] = -torch.rand((size, 1), device=self.device) * 2.0
+        ball_vel[env_idx, 0] = (torch.rand(size, device=self.device) - 0.5) * 0.1
+        ball_vel[env_idx, 1] = -torch.rand(size, device=self.device) * 2.0
         # should not advance time
         mjw.forward(self.model_d, self.data_d)
 
