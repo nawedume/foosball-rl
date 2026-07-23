@@ -105,8 +105,11 @@ class FoosballEnv(VecEnv):
         self.red_goal_center = torch.tensor(GOAL_CENTER_RED, device=self.device).unsqueeze(0)
 
         self.side = torch.zeros((self.num_envs), dtype=torch.int8, device=self.device)
+        self.opp_side = 1 - self.side
 
         self.goal_reward = 100.0
+
+        self.opponent_policy = None
 
         self._reset(None)
 
@@ -152,12 +155,33 @@ class FoosballEnv(VecEnv):
 
         control = wp.to_torch(self.data_d.ctrl)
         assert control.shape[1] == 16
-        assert actions.shape[1] == 8
+        
+        if actions.shape == 16:
+            control[:] = actions
+        else:
+            control.zero_()
+            is_red = self.side == 1
 
-        control.zero_()
-        is_red = self.side == 1
-        control[~is_red, :8] = actions[~is_red]
-        control[is_red, 8:] = actions[is_red]
+            if self.opponent_policy is not None:
+                self.side = 1 - self.side
+                op_obs = self.get_observations()
+                with torch.no_grad():
+                    op_actions = self.opponent_policy(op_obs)
+                self.side = 1 - self.side
+
+                control[~is_red, :8] = actions[~is_red]
+                control[~is_red, 8:] = op_actions[~is_red]
+
+                control[is_red, 8:] = actions[is_red]
+                control[is_red, :8] = op_actions[is_red]
+            else:
+                op_actions = torch.sin(self.episode_length_buf.float()*0.1).unsqueeze(1).repeat(1,8)*20
+                
+                control[~is_red, :8] = actions[~is_red]
+                control[~is_red, 8:] = op_actions[~is_red]
+                
+                control[is_red, 8:] = actions[is_red]
+                control[is_red, :8] = op_actions[is_red]
 
         mjw.step(self.model_d, self.data_d)
 

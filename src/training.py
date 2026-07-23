@@ -1,3 +1,4 @@
+import copy
 from rsl_rl.runners import OnPolicyRunner
 from src.env import FoosballEnv
 
@@ -16,7 +17,6 @@ train_cfg = {
         "learning_rate": 1e-3,
         "max_grad_norm": 1.0,
     },
-    
     "actor": {
         "class_name": "MLPModel",
         "hidden_dims": [256, 128, 64],
@@ -37,10 +37,19 @@ train_cfg = {
 if __name__ == "__main__":
     # Initialize the environment
     env = FoosballEnv(num_envs=2048, dt=1.0/60.0, device="cuda:0", model="model.xml")
+
+    print("Loading enemy...")
+
+    temp_runner = OnPolicyRunner(env, copy.deepcopy(train_cfg), log_dir="foosball", device="cuda:0")
+
+    temp_runner.load("logs/foosball/opponent_1.pt")
+
+    env.opponent_policy = temp_runner.get_inference_policy(device="cuda:0")
     
     # Initialize the runner
-    runner = OnPolicyRunner(env, train_cfg, log_dir="logs/foosball", device="cuda:0")
+    runner = OnPolicyRunner(env, copy.deepcopy(train_cfg), log_dir="logs/foosball2", device="cuda:0")
+    runner.load("logs/foosball/model_1450")
     print("Starting training block...")
     
     # Execute the learning loop
-    runner.learn(num_learning_iterations=10, init_at_random_ep_len=True)
+    runner.learn(num_learning_iterations=1500, init_at_random_ep_len=True)
