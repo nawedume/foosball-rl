@@ -13,7 +13,7 @@ train_cfg = {
         "clip_param": 0.2,
         "entropy_coef": 0.01,
         "num_learning_epochs": 5,
-        "num_mini_batches": 4, 
+        "num_mini_batches": 4,
         "learning_rate": 1e-3,
         "max_grad_norm": 1.0,
     },
@@ -40,16 +40,14 @@ if __name__ == "__main__":
 
     print("Loading enemy...")
 
-    temp_runner = OnPolicyRunner(env, copy.deepcopy(train_cfg), log_dir="foosball", device="cuda:0")
+    # temp_runner = OnPolicyRunner(env, copy.deepcopy(train_cfg), log_dir="foosball", device="cuda:0")
+    # temp_runner.load("logs/foosball2/opp_2.pt")
+    # env.opponent_policy = temp_runner.get_inference_policy(device="cuda:0")
 
-    temp_runner.load("logs/foosball2/opp_2.pt")
-
-    env.opponent_policy = temp_runner.get_inference_policy(device="cuda:0")
-    
     # Initialize the runner
     runner = OnPolicyRunner(env, copy.deepcopy(train_cfg), log_dir="logs/foosball4", device="cuda:0")
-    #runner.load("logs/foosball/model_1450.pt")
+    runner.load("logs/foosball/model_1450.pt")
     print("Starting training block...")
-    
+
     # Execute the learning loop
     runner.learn(num_learning_iterations=1000, init_at_random_ep_len=True)

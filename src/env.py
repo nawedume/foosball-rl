@@ -20,11 +20,12 @@ GOAL_CENTER_RED = [-0.550284, 0.0, 0.289419]
 class FoosballEnv(VecEnv):
     """An environment for the foosball training."""
 
-    def __init__(self, num_envs: int = 1, dt: float = 1.0 / 60.0, device: str = "cuda:0", model="model.xml", sync_with_viewer=False) -> None:
+    def __init__(self, num_envs: int = 1, dt: float = 1.0 / 60.0, device: str = "cuda:0", model="model.xml", sync_with_viewer=False, always_blue=False) -> None:
         super().__init__()
 
         self.num_envs = num_envs
         self.sync_with_viewer = sync_with_viewer
+        self.always_blue = always_blue
 
         # for each 4 rods, we can rotate and slide, 4x2 = 8 actions.
         # should output torques and forces for the motoros. See model.xml for definitions of actuators.
@@ -34,7 +35,7 @@ class FoosballEnv(VecEnv):
         # 1 minute worth of steps
         self.max_episode_length = int(60 / dt) // 2
         self.episode_length_buf = torch.zeros(num_envs, dtype=torch.long, device=device)
-        self.decimation = 8
+        self.decimation = 1
 
         self.device = device
         self.cfg = {}
@@ -130,10 +131,11 @@ class FoosballEnv(VecEnv):
 
         ball_pos_rel = q_pos[:, 16:]
         ball_pos_rel[:, :3] = torch.where(is_red.unsqueeze(1), ball_pos_rel[:, :3] - self.red_goal_center, ball_pos_rel[:, :3] - self.blue_goal_center)
+        ball_pos_rel[is_red, 0] = -ball_pos_rel[is_red, 0]
 
         # reverse the direction so its always from the perspective of the current player
         ball_vel_rel = q_vel[:, 16:]
-        ball_vel_rel[is_red, 0:2] = -ball_vel_rel[is_red, 0:2]
+        ball_vel_rel[is_red, 0] = -ball_vel_rel[is_red, 0]
 
         blue_pos = q_pos[:, :8]
         blue_vel = q_vel[:, :8]
@@ -158,7 +160,7 @@ class FoosballEnv(VecEnv):
         control = wp.to_torch(self.data_d.ctrl)
         assert control.shape[1] == 16
 
-        if actions.shape == 16:
+        if actions.shape == 16 or actions.shape[1] == 16:
             control[:] = actions
         else:
             control.zero_()
@@ -179,13 +181,13 @@ class FoosballEnv(VecEnv):
 
             else:
                 op_actions = torch.sin(self.episode_length_buf.float()*0.1).unsqueeze(1).repeat(1,8)*20
-                
+
                 control[~is_red, :8] = actions[~is_red]
                 control[~is_red, 8:] = op_actions[~is_red]
 
                 control[is_red, 8:] = actions[is_red]
                 control[is_red, :8] = op_actions[is_red]
-        
+
         control = control
         for i in range(self.decimation):
             mjw.step(self.model_d, self.data_d)
@@ -212,7 +214,7 @@ class FoosballEnv(VecEnv):
         in_goal = blue_goals | red_goals
         goal_side = self.side[in_goal]
 
-        in_right_goal = ((self.side == 0) & blue_goals) | ((self.side == 1) & red_goals)
+        in_right_goal = ((self.side == 0) & red_goals) | ((self.side == 1) & blue_goals)
         rewards = torch.zeros(self.num_envs,  device=self.device)
         rewards[in_goal] = torch.where(in_right_goal[in_goal], self.goal_reward, -self.goal_reward)
 
@@ -244,6 +246,9 @@ class FoosballEnv(VecEnv):
             self.side[dones] = torch.randint(0, 2, size=(size, ), dtype=torch.int8, device=self.device)
             mjw.reset_data(self.model_d, self.data_d, reset=wp.from_torch(dones))
             env_idx = dones
+
+        if self.always_blue:
+            self.side[:] = 0
 
         ball_vel = wp.to_torch(self.data_d.qvel)[:, 16:]
         ball_vel[env_idx, 0] = (torch.rand(size, device=self.device) - 0.5) * 0.1
