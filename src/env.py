@@ -221,10 +221,26 @@ class FoosballEnv(VecEnv):
         # add distance reward
         # goal pivot is is (1 x 3), and the ball_pos is of sice (N, 3).
         blue_side_not_in_goal = ~in_goal & (self.side == 0)
-        rewards[blue_side_not_in_goal] = 2.0 - torch.linalg.vector_norm(ball_pos[blue_side_not_in_goal, :] - self.red_goal_center, dim=1)*0.01
 
         red_side_not_in_goal = ~in_goal & (self.side == 1)
-        rewards[red_side_not_in_goal] = 2.0 - torch.linalg.vector_norm(ball_pos[red_side_not_in_goal, :] - self.blue_goal_center, dim=1)*0.01
+
+        # 1. Calculate absolute distances to the target goals
+        blue_dist = torch.linalg.vector_norm(ball_pos[blue_side_not_in_goal, :] - self.red_goal_center, dim=1)
+        red_dist = torch.linalg.vector_norm(ball_pos[red_side_not_in_goal, :] - self.blue_goal_center, dim=1)
+
+        # 2. Apply distance penalty (Removed the +2.0 survival bonus)
+        # The agent now receives a small negative reward for the ball being far from the goal.
+        rewards[blue_side_not_in_goal] = -blue_dist * 0.01
+        rewards[red_side_not_in_goal] = -red_dist * 0.01
+
+        # 3. Apply the Control Penalty
+        # Assuming 'actions' is a tensor of shape (N, action_dim) containing the motor torques
+        # Formula: Penalty = scale * sum(action^2)
+        penalty_scale = 0.05
+        control_penalty = torch.sum(torch.square(actions), dim=1) * penalty_scale
+
+        # Subtract the penalty from the total rewards for this step
+        rewards -= control_penalty
 
         if dones.any():
             self._reset(dones)
