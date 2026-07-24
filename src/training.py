@@ -46,7 +46,7 @@ if __name__ == "__main__":
 
     # Initialize the runner
     runner = OnPolicyRunner(env, copy.deepcopy(train_cfg), log_dir="logs/foosball4", device="cuda:0")
-    runner.load("logs/foosball/model_1450.pt")
+    #runner.load("logs/foosball/model_1450.pt")
     print("Starting training block...")
 
     # Execute the learning loop
