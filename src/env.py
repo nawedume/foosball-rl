@@ -156,7 +156,8 @@ class FoosballEnv(VecEnv):
 
     def step(self, actions: torch.Tensor) -> tuple[TensorDict, torch.Tensor, torch.Tensor, dict]:
 
-        actions = torch.clamp(actions, min=-1.0, max=1.0)*40
+        raw_actions = torch.clamp(actions, min=-1.0, max=1.0)
+        actions = raw_actions*40
         control = wp.to_torch(self.data_d.ctrl)
         assert control.shape[1] == 16
 
@@ -238,7 +239,7 @@ class FoosballEnv(VecEnv):
         # Assuming 'actions' is a tensor of shape (N, action_dim) containing the motor torques
         # Formula: Penalty = scale * sum(action^2)
         penalty_scale = 0.05
-        control_penalty = torch.sum(torch.square(actions), dim=1) * penalty_scale
+        control_penalty = torch.sum(torch.square(raw_actions), dim=1) * penalty_scale
 
         # Subtract the penalty from the total rewards for this step
         rewards -= control_penalty
