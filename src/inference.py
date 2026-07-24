@@ -22,7 +22,7 @@ def play():
     runner = OnPolicyRunner(env, copy.deepcopy(train_cfg), log_dir="logs/foosball", device=device)
 
 
-    checkpoint = "logs/foosball/opponent_1.pt"
+    checkpoint = "logs/foosball2/opp_2.pt"
 
     runner.load(checkpoint)
 

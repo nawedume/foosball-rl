@@ -42,14 +42,14 @@ if __name__ == "__main__":
 
     temp_runner = OnPolicyRunner(env, copy.deepcopy(train_cfg), log_dir="foosball", device="cuda:0")
 
-    temp_runner.load("logs/foosball/opponent_1.pt")
+    temp_runner.load("logs/foosball2/opp_2.pt")
 
     env.opponent_policy = temp_runner.get_inference_policy(device="cuda:0")
     
     # Initialize the runner
-    runner = OnPolicyRunner(env, copy.deepcopy(train_cfg), log_dir="logs/foosball2", device="cuda:0")
-    runner.load("logs/foosball/model_1450")
+    runner = OnPolicyRunner(env, copy.deepcopy(train_cfg), log_dir="logs/foosball3", device="cuda:0")
+    #runner.load("logs/foosball/model_1450.pt")
     print("Starting training block...")
     
     # Execute the learning loop
-    runner.learn(num_learning_iterations=1500, init_at_random_ep_len=True)
+    runner.learn(num_learning_iterations=1000, init_at_random_ep_len=True)

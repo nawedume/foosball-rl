@@ -175,15 +175,17 @@ class FoosballEnv(VecEnv):
 
                 control[is_red, 8:] = actions[is_red]
                 control[is_red, :8] = op_actions[is_red]
-            else:
-                op_actions = torch.sin(self.episode_length_buf.float()*0.1).unsqueeze(1).repeat(1,8)*20
 
+            else:
+                op_actions = torch.sin(self.episode_length_buf.float()*0.1).unsqueeze(1).repeat(1,8)
+                
                 control[~is_red, :8] = actions[~is_red]
                 control[~is_red, 8:] = op_actions[~is_red]
 
                 control[is_red, 8:] = actions[is_red]
                 control[is_red, :8] = op_actions[is_red]
-
+        
+        control = control*40
         for i in range(self.decimation):
             mjw.step(self.model_d, self.data_d)
 
