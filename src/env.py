@@ -154,6 +154,7 @@ class FoosballEnv(VecEnv):
 
     def step(self, actions: torch.Tensor) -> tuple[TensorDict, torch.Tensor, torch.Tensor, dict]:
 
+        actions = actions*40
         control = wp.to_torch(self.data_d.ctrl)
         assert control.shape[1] == 16
 
@@ -185,7 +186,7 @@ class FoosballEnv(VecEnv):
                 control[is_red, 8:] = actions[is_red]
                 control[is_red, :8] = op_actions[is_red]
         
-        control = control*40
+        control = control
         for i in range(self.decimation):
             mjw.step(self.model_d, self.data_d)
 
