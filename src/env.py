@@ -235,6 +235,8 @@ class FoosballEnv(VecEnv):
         rewards[blue_side_not_in_goal] = -blue_dist * 0.01
         rewards[red_side_not_in_goal] = -red_dist * 0.01
 
+        out_of_bounds_penalty = -10.0  # Adjust based on your goal_reward of 100.0
+        rewards[out_of_bounds] = out_of_bounds_penalty
         # 3. Apply the Control Penalty
         # Assuming 'actions' is a tensor of shape (N, action_dim) containing the motor torques
         # Formula: Penalty = scale * sum(action^2)
