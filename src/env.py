@@ -34,6 +34,7 @@ class FoosballEnv(VecEnv):
         # 1 minute worth of steps
         self.max_episode_length = int(60 / dt) // 2
         self.episode_length_buf = torch.zeros(num_envs, dtype=torch.long, device=device)
+        self.decimation = 8
 
         self.device = device
         self.cfg = {}
@@ -151,11 +152,11 @@ class FoosballEnv(VecEnv):
         return TensorDict(ret, batch_size=[self.num_envs], device=self.device)
 
 
-    def step(self, actions: torch.Tensor) -> tuple[TensorDict,torch.Tensor, torch.Tensor, torch.Tensor, dict]:
+    def step(self, actions: torch.Tensor) -> tuple[TensorDict, torch.Tensor, torch.Tensor, dict]:
 
         control = wp.to_torch(self.data_d.ctrl)
         assert control.shape[1] == 16
-        
+
         if actions.shape == 16:
             control[:] = actions
         else:
@@ -176,14 +177,15 @@ class FoosballEnv(VecEnv):
                 control[is_red, :8] = op_actions[is_red]
             else:
                 op_actions = torch.sin(self.episode_length_buf.float()*0.1).unsqueeze(1).repeat(1,8)*20
-                
+
                 control[~is_red, :8] = actions[~is_red]
                 control[~is_red, 8:] = op_actions[~is_red]
-                
+
                 control[is_red, 8:] = actions[is_red]
                 control[is_red, :8] = op_actions[is_red]
 
-        mjw.step(self.model_d, self.data_d)
+        for i in range(self.decimation):
+            mjw.step(self.model_d, self.data_d)
 
         # Do I need this here if we just launch GPU kernels? Probably not remove later.
         wp.synchronize()
