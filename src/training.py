@@ -2,19 +2,20 @@ import copy
 from rsl_rl.runners import OnPolicyRunner
 from src.env import FoosballEnv
 
+
 train_cfg = {
     "obs_groups": {},
-    "num_steps_per_env": 24, # Steps to collect per env before a PPO update
-    "save_interval": 50,     # Save a checkpoint every 50 iterations
+    "num_steps_per_env": 256,    # INCREASED: Was 24
+    "save_interval": 50,         
     "algorithm": {
         "class_name": "PPO",
         "value_loss_coef": 1.0,
         "use_clipped_value_loss": True,
         "clip_param": 0.2,
-        "entropy_coef": 0.01,
+        "entropy_coef": 0.0,     # DECREASED: Was 0.01
         "num_learning_epochs": 5,
         "num_mini_batches": 4,
-        "learning_rate": 1e-3,
+        "learning_rate": 3e-4,   # DECREASED: Was 1e-3
         "max_grad_norm": 1.0,
     },
     "actor": {
@@ -23,7 +24,7 @@ train_cfg = {
         "activation": "elu",
         "distribution_cfg": {
             "class_name": "GaussianDistribution",
-            "init_std": 1.0,
+            "init_std": 0.5,     # DECREASED: Was 1.0
             "std_type": "scalar",
         },
     },
