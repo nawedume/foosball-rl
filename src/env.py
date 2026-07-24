@@ -4,7 +4,6 @@ from tensordict import TensorDict
 import torch
 import time
 import warp as wp
-# from typing import tuple
 
 wp.config.enable_mathdx_solver = False
 
@@ -18,7 +17,7 @@ GOAL_CENTER_BLUE = [0.563284, 0.0, 0.289419]
 GOAL_CENTER_RED = [-0.550284, 0.0, 0.289419]
 
 class FoosballEnv(VecEnv):
-    """An environment for the foosball training."""
+    """An environment for foosball training with corrected perspective symmetries."""
 
     def __init__(self, num_envs: int = 1, dt: float = 1.0 / 60.0, device: str = "cuda:0", model="model.xml", sync_with_viewer=False, always_blue=False) -> None:
         super().__init__()
@@ -27,12 +26,9 @@ class FoosballEnv(VecEnv):
         self.sync_with_viewer = sync_with_viewer
         self.always_blue = always_blue
 
-        # for each 4 rods, we can rotate and slide, 4x2 = 8 actions.
-        # should output torques and forces for the motoros. See model.xml for definitions of actuators.
         self.num_actions = 8
         self.num_obs = 46
         self.num_privileged_obs = 46
-        # 1 minute worth of steps
         self.max_episode_length = int(60 / dt) // 2
         self.episode_length_buf = torch.zeros(num_envs, dtype=torch.long, device=device)
         self.decimation = 1
@@ -41,68 +37,24 @@ class FoosballEnv(VecEnv):
         self.cfg = {}
 
         wp.set_device(device)
-        # mujcoco init
         with open("./model.xml") as f:
             model_str = f.read()
 
-        self.mjm = mujoco.MjModel.from_xml_string(model_str)  # pyright: ignore[reportAttributeAccessIssue]
-        self.mjd = mujoco.MjData(self.mjm)  # pyright: ignore[reportAttributeAccessIssue]
+        self.mjm = mujoco.MjModel.from_xml_string(model_str)
+        self.mjd = mujoco.MjData(self.mjm)
         self.mjm.opt.timestep = dt
 
-        # Might not need CPU buffer, can keep it on the GPU?
-        # self.mjd = mujoco.MjData(mjm)  # pyright: ignore[reportAttributeAccessIssue]
-
-        dt = self.mjm.opt.timestep
-
-        # on device data
         self.model_d = mjw.put_model(self.mjm)
         self.data_d = mjw.make_data(self.mjm, nworld=num_envs)
 
-        # Retrieve IDs for all items
-        self.ball_id = mujoco.mj_name2id(  # pyright: ignore[reportAttributeAccessIssue]
-            self.mjm, mujoco.mjtObj.mjOBJ_BODY, "ball"  # pyright: ignore[reportAttributeAccessIssue]
-        )
+        self.ball_id = mujoco.mj_name2id(self.mjm, mujoco.mjtObj.mjOBJ_BODY, "ball")
 
-        self.blue_rod_11 = mujoco.mj_name2id(  # pyright: ignore[reportAttributeAccessIssue]
-            self.mjm, mujoco.mjtObj.mjOBJ_BODY, "blue_11"  # pyright: ignore[reportAttributeAccessIssue]
-        )
-        self.blue_rod_12 = mujoco.mj_name2id(  # pyright: ignore[reportAttributeAccessIssue]
-            self.mjm, mujoco.mjtObj.mjOBJ_BODY, "blue_12"  # pyright: ignore[reportAttributeAccessIssue]
-        )
-        self.blue_rod_2 = mujoco.mj_name2id(  # pyright: ignore[reportAttributeAccessIssue]
-            self.mjm, mujoco.mjtObj.mjOBJ_BODY, "blue_2"  # pyright: ignore[reportAttributeAccessIssue]
-        )
-        self.blue_rod_3 = mujoco.mj_name2id(  # pyright: ignore[reportAttributeAccessIssue]
-            self.mjm, mujoco.mjtObj.mjOBJ_BODY, "blue_3"  # pyright: ignore[reportAttributeAccessIssue]
-        )
-
-        self.red_rod_11 = mujoco.mj_name2id(  # pyright: ignore[reportAttributeAccessIssue]
-            self.mjm, mujoco.mjtObj.mjOBJ_BODY, "red_11"  # pyright: ignore[reportAttributeAccessIssue]
-        )
-        self.red_rod_12 = mujoco.mj_name2id(  # pyright: ignore[reportAttributeAccessIssue]
-            self.mjm, mujoco.mjtObj.mjOBJ_BODY, "red_12"  # pyright: ignore[reportAttributeAccessIssue]
-        )
-        self.red_rod_2 = mujoco.mj_name2id(  # pyright: ignore[reportAttributeAccessIssue]
-            self.mjm, mujoco.mjtObj.mjOBJ_BODY, "red_2"  # pyright: ignore[reportAttributeAccessIssue]
-        )
-        self.red_rod_3 = mujoco.mj_name2id(  # pyright: ignore[reportAttributeAccessIssue]
-            self.mjm, mujoco.mjtObj.mjOBJ_BODY, "red_3"  # pyright: ignore[reportAttributeAccessIssue]
-        )
-
-        blue_goal_sensor_id = mujoco.mj_name2id(  # pyright: ignore[reportAttributeAccessIssue]
-            self.mjm, mujoco.mjtObj.mjOBJ_SENSOR,  # pyright: ignore[reportAttributeAccessIssue]
-            "blue_goal_reached"
-        )
+        blue_goal_sensor_id = mujoco.mj_name2id(self.mjm, mujoco.mjtObj.mjOBJ_SENSOR, "blue_goal_reached")
         self.blue_goal_sensor_adr = self.mjm.sensor_adr[blue_goal_sensor_id]
 
-        red_goal_sensor_id = mujoco.mj_name2id(  # pyright: ignore[reportAttributeAccessIssue]
-            self.mjm, mujoco.mjtObj.mjOBJ_SENSOR,  # pyright: ignore[reportAttributeAccessIssue]
-            "red_goal_reached"
-        )
+        red_goal_sensor_id = mujoco.mj_name2id(self.mjm, mujoco.mjtObj.mjOBJ_SENSOR, "red_goal_reached")
         self.red_goal_sensor_adr = self.mjm.sensor_adr[red_goal_sensor_id]
 
-        # unfortunately due to a bad table asset, this isn't symmetrical :(
-        # should update the asset later to be much better
         self.blue_goal_center = torch.tensor(GOAL_CENTER_BLUE, device=self.device).unsqueeze(0)
         self.red_goal_center = torch.tensor(GOAL_CENTER_RED, device=self.device).unsqueeze(0)
 
@@ -110,95 +62,100 @@ class FoosballEnv(VecEnv):
         self.opp_side = 1 - self.side
 
         self.goal_reward = 100.0
-
         self.opponent_policy = None
 
         self._reset(None)
 
-
     def get_observations(self) -> TensorDict:
-        # All this is pretty bad so we need to optimize. The idea here is that we want
-        # to ensure that the view for the policy is symmetrical regardless of what side its on.
-        # So we make the position relative to its own goal, and negate the velocity if its player 2 (red)
-        # We also ensure that the player state is first, and add a single bit of information stating the player
-        # so the policy can deal with asymmetry on the table, which exists because its a bad table asset.
-        # In the future, we should really optimize this, perhaps using Warp, and also use a better table asset.
         q_pos = wp.to_torch(self.data_d.qpos).clone()
         q_vel = wp.to_torch(self.data_d.qvel).clone()
 
-        # qpos and qvel should just be the cartesian coordinates
         is_red = self.side == 1
 
-        ball_pos_rel = q_pos[:, 16:]
-        ball_pos_rel[:, :3] = torch.where(is_red.unsqueeze(1), ball_pos_rel[:, :3] - self.red_goal_center, ball_pos_rel[:, :3] - self.blue_goal_center)
+        # Relative ball positions and velocities
+        ball_pos_rel = q_pos[:, 16:].clone()
+        ball_pos_rel[:, :3] = torch.where(
+            is_red.unsqueeze(1), 
+            ball_pos_rel[:, :3] - self.red_goal_center, 
+            ball_pos_rel[:, :3] - self.blue_goal_center
+        )
+        
+        # Mirror BOTH X and Y axes for Red so left/right and forward/backward match perspective
         ball_pos_rel[is_red, 0] = -ball_pos_rel[is_red, 0]
+        ball_pos_rel[is_red, 1] = -ball_pos_rel[is_red, 1]
 
-        # reverse the direction so its always from the perspective of the current player
-        ball_vel_rel = q_vel[:, 16:]
+        ball_vel_rel = q_vel[:, 16:].clone()
         ball_vel_rel[is_red, 0] = -ball_vel_rel[is_red, 0]
+        ball_vel_rel[is_red, 1] = -ball_vel_rel[is_red, 1]
 
+        # Rod states
         blue_pos = q_pos[:, :8]
         blue_vel = q_vel[:, :8]
         blue_state = torch.cat([blue_pos, blue_vel], dim=-1)
 
         red_pos = q_pos[:, 8:16]
         red_vel = q_vel[:, 8:16]
-        red_state = torch.cat([red_pos, red_vel], dim=-1)
+        # Negate Red's rod state so positive values represent forward tilt/movement from Red's view
+        red_state = torch.cat([-red_pos, -red_vel], dim=-1)
 
         player_rod_state = torch.where(is_red.unsqueeze(1), red_state, blue_state)
         op_rod_state = torch.where(is_red.unsqueeze(1), blue_state, red_state)
 
         data = torch.cat([player_rod_state, op_rod_state, ball_pos_rel, ball_vel_rel, self.side.to(torch.float).unsqueeze(1)], dim=1)
 
-        ret = { "policy": data }
+        ret = {"policy": data}
         return TensorDict(ret, batch_size=[self.num_envs], device=self.device)
 
-
     def step(self, actions: torch.Tensor) -> tuple[TensorDict, torch.Tensor, torch.Tensor, dict]:
-
+        # 1. Action Clamping & Scaling
         raw_actions = torch.clamp(actions, min=-1.0, max=1.0)
-        actions = raw_actions*40
+        scaled_actions = raw_actions * 40.0
+        
         control = wp.to_torch(self.data_d.ctrl)
         assert control.shape[1] == 16
 
-        if actions.shape == 16 or actions.shape[1] == 16:
-            control[:] = actions
+        if scaled_actions.shape == 16 or scaled_actions.shape[1] == 16:
+            control[:] = scaled_actions
         else:
             control.zero_()
             is_red = self.side == 1
 
             if self.opponent_policy is not None:
+                # Evaluate opponent
                 self.side = 1 - self.side
                 op_obs = self.get_observations()
                 with torch.no_grad():
                     op_actions = self.opponent_policy(op_obs)
+                    if isinstance(op_actions, TensorDict):
+                        op_actions = op_actions["policy"]
                 self.side = 1 - self.side
 
-                control[~is_red, :8] = actions[~is_red]
-                control[~is_red, 8:] = op_actions[~is_red]
+                op_scaled_actions = torch.clamp(op_actions, min=-1.0, max=1.0) * 40.0
 
-                control[is_red, 8:] = actions[is_red]
-                control[is_red, :8] = op_actions[is_red]
+                # Blue envs: Player is Blue (:8), Opponent is Red (8: negated)
+                control[~is_red, :8] = scaled_actions[~is_red]
+                control[~is_red, 8:] = -op_scaled_actions[~is_red]
+
+                # Red envs: Player is Red (8: negated), Opponent is Blue (:8)
+                control[is_red, 8:] = -scaled_actions[is_red]
+                control[is_red, :8] = op_scaled_actions[is_red]
 
             else:
-                op_actions = torch.sin(self.episode_length_buf.float()*0.1).unsqueeze(1).repeat(1,8)*20
+                op_actions = torch.sin(self.episode_length_buf.float() * 0.1).unsqueeze(1).repeat(1, 8) * 20.0
 
-                control[~is_red, :8] = actions[~is_red]
+                control[~is_red, :8] = scaled_actions[~is_red]
                 control[~is_red, 8:] = op_actions[~is_red]
 
-                control[is_red, 8:] = actions[is_red]
+                control[is_red, 8:] = -scaled_actions[is_red]
                 control[is_red, :8] = op_actions[is_red]
 
-        control = control
         for i in range(self.decimation):
             mjw.step(self.model_d, self.data_d)
 
-        # Do I need this here if we just launch GPU kernels? Probably not remove later.
         wp.synchronize()
-
         self.episode_length_buf += 1
 
-        # used for termination and rewards
+        # Environment State & Resets
         ball_pos = wp.to_torch(self.data_d.xpos)[:, self.ball_id]
         out_of_bounds = ball_pos[:, 2] <= TERMINATION_HEIGHT
 
@@ -211,39 +168,39 @@ class FoosballEnv(VecEnv):
 
         obs = self.get_observations()
 
-        # include goal scoring here later.
+        # Goal Rewards
         in_goal = blue_goals | red_goals
-        goal_side = self.side[in_goal]
-
         in_right_goal = ((self.side == 0) & red_goals) | ((self.side == 1) & blue_goals)
-        rewards = torch.zeros(self.num_envs,  device=self.device)
+        rewards = torch.zeros(self.num_envs, device=self.device)
         rewards[in_goal] = torch.where(in_right_goal[in_goal], self.goal_reward, -self.goal_reward)
 
-        # add distance reward
-        # goal pivot is is (1 x 3), and the ball_pos is of sice (N, 3).
+        # Distance Penalty
         blue_side_not_in_goal = ~in_goal & (self.side == 0)
-
         red_side_not_in_goal = ~in_goal & (self.side == 1)
 
-        # 1. Calculate absolute distances to the target goals
-        blue_dist = torch.linalg.vector_norm(ball_pos[blue_side_not_in_goal, :] - self.red_goal_center, dim=1)
-        blue_dist = torch.clamp(blue_dist, max=2.0)
-        red_dist = torch.linalg.vector_norm(ball_pos[red_side_not_in_goal, :] - self.blue_goal_center, dim=1)
-        red_dist = torch.clamp(red_dist, max=2.0)
-        # 2. Apply distance penalty (Removed the +2.0 survival bonus)
-        # The agent now receives a small negative reward for the ball being far from the goal.
+        blue_dist = torch.clamp(torch.linalg.vector_norm(ball_pos[blue_side_not_in_goal, :] - self.red_goal_center, dim=1), max=2.0)
+        red_dist = torch.clamp(torch.linalg.vector_norm(ball_pos[red_side_not_in_goal, :] - self.blue_goal_center, dim=1), max=2.0)
+
         rewards[blue_side_not_in_goal] = -blue_dist * 0.01
         rewards[red_side_not_in_goal] = -red_dist * 0.01
 
-        out_of_bounds_penalty = -10.0  # Adjust based on your goal_reward of 100.0
-        rewards[out_of_bounds] = out_of_bounds_penalty
-        # 3. Apply the Control Penalty
-        # Assuming 'actions' is a tensor of shape (N, action_dim) containing the motor torques
-        # Formula: Penalty = scale * sum(action^2)
+        # Out of Bounds Penalty
+        rewards[out_of_bounds] = -10.0
+
+        # Velocity Bonus (Restored)
+        ball_vel = wp.to_torch(self.data_d.qvel)[:, 16:]
+        world_ball_vel_x = ball_vel[:, 0]
+
+        blue_forward_vel = torch.clamp(-world_ball_vel_x[blue_side_not_in_goal], min=0.0)
+        red_forward_vel = torch.clamp(world_ball_vel_x[red_side_not_in_goal], min=0.0)
+
+        velocity_scale = 0.2
+        rewards[blue_side_not_in_goal] += blue_forward_vel * velocity_scale
+        rewards[red_side_not_in_goal] += red_forward_vel * velocity_scale
+
+        # Control Penalty (Calculated on raw [-1, 1] actions)
         penalty_scale = 0.05
         control_penalty = torch.sum(torch.square(raw_actions), dim=1) * penalty_scale
-
-        # Subtract the penalty from the total rewards for this step
         rewards -= control_penalty
 
         if dones.any():
@@ -254,16 +211,14 @@ class FoosballEnv(VecEnv):
 
         return obs, rewards, dones, {}
 
-
     def _reset(self, dones: torch.Tensor | None = None):
         if dones is None:
             env_idx = slice(None)
-            self.side[env_idx] = torch.randint(0, 2, size=(self.num_envs, ), dtype=torch.int8, device=self.device)
+            self.side[env_idx] = torch.randint(0, 2, size=(self.num_envs,), dtype=torch.int8, device=self.device)
             size = self.num_envs
-
         else:
             size = int(dones.sum().item())
-            self.side[dones] = torch.randint(0, 2, size=(size, ), dtype=torch.int8, device=self.device)
+            self.side[dones] = torch.randint(0, 2, size=(size,), dtype=torch.int8, device=self.device)
             mjw.reset_data(self.model_d, self.data_d, reset=wp.from_torch(dones))
             env_idx = dones
 
@@ -273,7 +228,6 @@ class FoosballEnv(VecEnv):
         ball_vel = wp.to_torch(self.data_d.qvel)[:, 16:]
         ball_vel[env_idx, 0] = (torch.rand(size, device=self.device) - 0.5) * 0.1
         ball_vel[env_idx, 1] = -torch.rand(size, device=self.device) * 2.0
-        # should not advance time
         mjw.forward(self.model_d, self.data_d)
 
     def get_sim_data(self):
