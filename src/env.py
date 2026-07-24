@@ -226,8 +226,9 @@ class FoosballEnv(VecEnv):
 
         # 1. Calculate absolute distances to the target goals
         blue_dist = torch.linalg.vector_norm(ball_pos[blue_side_not_in_goal, :] - self.red_goal_center, dim=1)
+        blue_dist = torch.clamp(blue_dist, max=2.0)
         red_dist = torch.linalg.vector_norm(ball_pos[red_side_not_in_goal, :] - self.blue_goal_center, dim=1)
-
+        red_dist = torch.clamp(red_dist, max=2.0)
         # 2. Apply distance penalty (Removed the +2.0 survival bonus)
         # The agent now receives a small negative reward for the ball being far from the goal.
         rewards[blue_side_not_in_goal] = -blue_dist * 0.01
