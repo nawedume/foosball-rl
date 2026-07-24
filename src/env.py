@@ -154,7 +154,7 @@ class FoosballEnv(VecEnv):
 
     def step(self, actions: torch.Tensor) -> tuple[TensorDict, torch.Tensor, torch.Tensor, dict]:
 
-        actions = actions*40
+        actions = torch.clamp(actions, min=-1.0, max=1.0)*40
         control = wp.to_torch(self.data_d.ctrl)
         assert control.shape[1] == 16
 
@@ -178,7 +178,7 @@ class FoosballEnv(VecEnv):
                 control[is_red, :8] = op_actions[is_red]
 
             else:
-                op_actions = torch.sin(self.episode_length_buf.float()*0.1).unsqueeze(1).repeat(1,8)
+                op_actions = torch.sin(self.episode_length_buf.float()*0.1).unsqueeze(1).repeat(1,8)*20
                 
                 control[~is_red, :8] = actions[~is_red]
                 control[~is_red, 8:] = op_actions[~is_red]
@@ -219,10 +219,10 @@ class FoosballEnv(VecEnv):
         # add distance reward
         # goal pivot is is (1 x 3), and the ball_pos is of sice (N, 3).
         blue_side_not_in_goal = ~in_goal & (self.side == 0)
-        rewards[blue_side_not_in_goal] = 2.0 - torch.linalg.vector_norm(ball_pos[blue_side_not_in_goal, :] - self.red_goal_center, dim=1)
+        rewards[blue_side_not_in_goal] = 2.0 - torch.linalg.vector_norm(ball_pos[blue_side_not_in_goal, :] - self.red_goal_center, dim=1)*0.01
 
         red_side_not_in_goal = ~in_goal & (self.side == 1)
-        rewards[red_side_not_in_goal] = 2.0 - torch.linalg.vector_norm(ball_pos[red_side_not_in_goal, :] - self.blue_goal_center, dim=1)
+        rewards[red_side_not_in_goal] = 2.0 - torch.linalg.vector_norm(ball_pos[red_side_not_in_goal, :] - self.blue_goal_center, dim=1)*0.01
 
         if dones.any():
             self._reset(dones)
