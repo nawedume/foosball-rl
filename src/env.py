@@ -206,10 +206,6 @@ class FoosballEnv(VecEnv):
         dones = (self.episode_length_buf > self.max_episode_length).bool() | out_of_bounds | blue_goals | red_goals
         self.episode_length_buf[dones] = 0
 
-        # TODO: reset environments
-        if dones.any():
-            self._reset(dones)
-
         obs = self.get_observations()
 
         # include goal scoring here later.
@@ -227,6 +223,9 @@ class FoosballEnv(VecEnv):
 
         red_side_not_in_goal = ~in_goal & (self.side == 1)
         rewards[red_side_not_in_goal] = 2.0 - torch.linalg.vector_norm(ball_pos[red_side_not_in_goal, :] - self.blue_goal_center, dim=1)
+
+        if dones.any():
+            self._reset(dones)
 
         if self.sync_with_viewer:
             self.get_sim_data()

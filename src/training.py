@@ -47,7 +47,7 @@ if __name__ == "__main__":
     env.opponent_policy = temp_runner.get_inference_policy(device="cuda:0")
     
     # Initialize the runner
-    runner = OnPolicyRunner(env, copy.deepcopy(train_cfg), log_dir="logs/foosball3", device="cuda:0")
+    runner = OnPolicyRunner(env, copy.deepcopy(train_cfg), log_dir="logs/foosball4", device="cuda:0")
     #runner.load("logs/foosball/model_1450.pt")
     print("Starting training block...")
     
