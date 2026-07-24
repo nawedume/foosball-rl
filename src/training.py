@@ -5,7 +5,7 @@ from src.env import FoosballEnv
 
 train_cfg = {
     "obs_groups": {},
-    "num_steps_per_env": 256,    # INCREASED: Was 24
+    "num_steps_per_env": 128,    # INCREASED: Was 24
     "save_interval": 50,         
     "algorithm": {
         "class_name": "PPO",
@@ -46,7 +46,7 @@ if __name__ == "__main__":
     # env.opponent_policy = temp_runner.get_inference_policy(device="cuda:0")
 
     # Initialize the runner
-    runner = OnPolicyRunner(env, copy.deepcopy(train_cfg), log_dir="logs/foosball4", device="cuda:0")
+    runner = OnPolicyRunner(env, copy.deepcopy(train_cfg), log_dir="../drive/MyDrive/logs/foosball4", device="cuda:0")
     #runner.load("logs/foosball/model_1450.pt")
     print("Starting training block...")
 
