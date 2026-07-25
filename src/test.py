@@ -15,19 +15,19 @@ parser.add_argument("--headless", action="store_true", help="headless mode")
 parser.add_argument("--run_zeros", action="store_true", help="zero mode")
 args_cli = parser.parse_args()
 
-device = 'cpu'
-env = FoosballEnv(device=device, sync_with_viewer=True, always_blue=True)
+device = 'cuda:0'
+env = FoosballEnv(device=device, sync_with_viewer=True, always_blue=True, bias_to_blue=True)
 
 test_data = []
 
 def run_env():
 
     if args_cli.run_zeros:
-        actions = torch.zeros((env.num_envs, 16))
+        actions = torch.zeros((env.num_envs, 8), device=device)
     else:
-        actions = torch.sin(env.episode_length_buf * 0.1).unsqueeze(1).repeat(1, 16) * 20.0
+        actions = torch.sin(env.episode_length_buf * 0.1).unsqueeze(1).repeat(1, 8).to(device)
 
-    assert actions.shape == (env.num_envs, 16)
+    assert actions.shape == (env.num_envs, 8)
     obs, rewards, dones, _ = env.step(actions)
 
     ball_pos_rel = obs["policy"][0, 32:35]

@@ -19,17 +19,29 @@ GOAL_CENTER_RED = [-0.550284, 0.0, 0.289419]
 class FoosballEnv(VecEnv):
     """An environment for foosball training with corrected perspective symmetries."""
 
-    def __init__(self, num_envs: int = 1, dt: float = 1.0 / 60.0, device: str = "cuda:0", model="model.xml", sync_with_viewer=False, always_blue=False) -> None:
+    def __init__(
+        self,
+        num_envs: int = 1,
+        dt: float = 1.0 / 60.0,
+        device: str = "cuda:0",
+        model="model.xml",
+        sync_with_viewer=False,
+        always_blue=False,
+        op_policy=None,
+        bias_to_blue=False,
+    ) -> None:
+
         super().__init__()
 
         self.num_envs = num_envs
         self.sync_with_viewer = sync_with_viewer
         self.always_blue = always_blue
+        self.bias_to_blue = True
 
         self.num_actions = 8
         self.num_obs = 46
         self.num_privileged_obs = 46
-        self.max_episode_length = int(60 / dt) // 2
+        self.max_episode_length = int(60 / dt) // 4
         self.episode_length_buf = torch.zeros(num_envs, dtype=torch.long, device=device)
         self.decimation = 1
 
@@ -61,9 +73,14 @@ class FoosballEnv(VecEnv):
         self.side = torch.zeros((self.num_envs), dtype=torch.int8, device=self.device)
         self.opp_side = 1 - self.side
 
-        self.goal_reward = 100.0
-        self.opponent_policy = None
+        self.goal_reward = 2000.0
 
+        if op_policy is None:
+            self.op_policy = NullPolicy(device=self.device)
+        else:
+            self.op_policy = op_policy
+
+        self.cached_obs = {}
         self._reset(None)
 
     def get_observations(self) -> TensorDict:
@@ -73,18 +90,18 @@ class FoosballEnv(VecEnv):
         is_red = self.side == 1
 
         # Relative ball positions and velocities
-        ball_pos_rel = q_pos[:, 16:].clone()
+        ball_pos_rel = q_pos[:, 16:19].clone()
         ball_pos_rel[:, :3] = torch.where(
-            is_red.unsqueeze(1), 
-            ball_pos_rel[:, :3] - self.red_goal_center, 
+            is_red.unsqueeze(1),
+            ball_pos_rel[:, :3] - self.red_goal_center,
             ball_pos_rel[:, :3] - self.blue_goal_center
         )
-        
+
         # Mirror BOTH X and Y axes for Red so left/right and forward/backward match perspective
         ball_pos_rel[is_red, 0] = -ball_pos_rel[is_red, 0]
         ball_pos_rel[is_red, 1] = -ball_pos_rel[is_red, 1]
 
-        ball_vel_rel = q_vel[:, 16:].clone()
+        ball_vel_rel = q_vel[:, 16:19].clone()
         ball_vel_rel[is_red, 0] = -ball_vel_rel[is_red, 0]
         ball_vel_rel[is_red, 1] = -ball_vel_rel[is_red, 1]
 
@@ -110,49 +127,23 @@ class FoosballEnv(VecEnv):
         # 1. Action Clamping & Scaling
         raw_actions = torch.clamp(actions, min=-1.0, max=1.0)
         scaled_actions = raw_actions * 40.0
-        
+
         control = wp.to_torch(self.data_d.ctrl)
-        assert control.shape[1] == 16
 
-        if scaled_actions.shape == 16 or scaled_actions.shape[1] == 16:
-            control[:] = scaled_actions
-        else:
-            control.zero_()
-            is_red = self.side == 1
+        is_red = self.side == 1
+        control.zero_()
 
-            if self.opponent_policy is not None:
-                # Evaluate opponent
-                self.side = 1 - self.side
-                op_obs = self.get_observations()
-                with torch.no_grad():
-                    op_actions = self.opponent_policy(op_obs)
-                    if isinstance(op_actions, TensorDict):
-                        op_actions = op_actions["policy"]
-                self.side = 1 - self.side
+        control[is_red, 8:16] = scaled_actions[is_red]
+        control[~is_red, :8] = scaled_actions[~is_red]
 
-                op_scaled_actions = torch.clamp(op_actions, min=-1.0, max=1.0) * 40.0
+        op_actions = self.op_policy.get_actions(self.num_envs, self.cached_obs) * 40.0
+        control[is_red, :8] =  op_actions[is_red]
+        control[~is_red, 8:16] = op_actions[~is_red]
 
-                # Blue envs: Player is Blue (:8), Opponent is Red (8: negated)
-                control[~is_red, :8] = scaled_actions[~is_red]
-                control[~is_red, 8:] = -op_scaled_actions[~is_red]
-
-                # Red envs: Player is Red (8: negated), Opponent is Blue (:8)
-                control[is_red, 8:] = -scaled_actions[is_red]
-                control[is_red, :8] = op_scaled_actions[is_red]
-
-            else:
-                op_actions = torch.sin(self.episode_length_buf.float() * 0.1).unsqueeze(1).repeat(1, 8) * 20.0
-
-                control[~is_red, :8] = scaled_actions[~is_red]
-                control[~is_red, 8:] = op_actions[~is_red]
-
-                control[is_red, 8:] = -scaled_actions[is_red]
-                control[is_red, :8] = op_actions[is_red]
-
-        for i in range(self.decimation):
+        for _ in range(self.decimation):
             mjw.step(self.model_d, self.data_d)
 
-        wp.synchronize()
+        # wp.synchronize()
         self.episode_length_buf += 1
 
         # Environment State & Resets
@@ -163,48 +154,25 @@ class FoosballEnv(VecEnv):
         blue_goals = sensor_data[:, self.blue_goal_sensor_adr] > 0.5
         red_goals = sensor_data[:, self.red_goal_sensor_adr] > 0.5
 
+        rewards = compute_rewards(
+            blue_goals,
+            red_goals,
+            self.side,
+            ball_pos,
+            self.blue_goal_center,
+            self.red_goal_center,
+            out_of_bounds,
+            self.goal_reward,
+            self.num_envs,
+        )
+
         dones = (self.episode_length_buf > self.max_episode_length).bool() | out_of_bounds | blue_goals | red_goals
         self.episode_length_buf[dones] = 0
-
-        obs = self.get_observations()
-
-        # Goal Rewards
-        in_goal = blue_goals | red_goals
-        in_right_goal = ((self.side == 0) & red_goals) | ((self.side == 1) & blue_goals)
-        rewards = torch.zeros(self.num_envs, device=self.device)
-        rewards[in_goal] = torch.where(in_right_goal[in_goal], self.goal_reward, -self.goal_reward)
-
-        # Distance Penalty
-        blue_side_not_in_goal = ~in_goal & (self.side == 0)
-        red_side_not_in_goal = ~in_goal & (self.side == 1)
-
-        blue_dist = torch.clamp(torch.linalg.vector_norm(ball_pos[blue_side_not_in_goal, :] - self.red_goal_center, dim=1), max=2.0)
-        red_dist = torch.clamp(torch.linalg.vector_norm(ball_pos[red_side_not_in_goal, :] - self.blue_goal_center, dim=1), max=2.0)
-
-        rewards[blue_side_not_in_goal] = -blue_dist * 0.01
-        rewards[red_side_not_in_goal] = -red_dist * 0.01
-
-        # Out of Bounds Penalty
-        rewards[out_of_bounds] = -10.0
-
-        # Velocity Bonus (Restored)
-        ball_vel = wp.to_torch(self.data_d.qvel)[:, 16:]
-        world_ball_vel_x = ball_vel[:, 0]
-
-        blue_forward_vel = torch.clamp(-world_ball_vel_x[blue_side_not_in_goal], min=0.0)
-        red_forward_vel = torch.clamp(world_ball_vel_x[red_side_not_in_goal], min=0.0)
-
-        velocity_scale = 0.2
-        rewards[blue_side_not_in_goal] += blue_forward_vel * velocity_scale
-        rewards[red_side_not_in_goal] += red_forward_vel * velocity_scale
-
-        # Control Penalty (Calculated on raw [-1, 1] actions)
-        penalty_scale = 0.05
-        control_penalty = torch.sum(torch.square(raw_actions), dim=1) * penalty_scale
-        rewards -= control_penalty
-
         if dones.any():
             self._reset(dones)
+
+        obs = self.get_observations()
+        self.cached_obs = obs
 
         if self.sync_with_viewer:
             self.get_sim_data()
@@ -226,9 +194,70 @@ class FoosballEnv(VecEnv):
             self.side[:] = 0
 
         ball_vel = wp.to_torch(self.data_d.qvel)[:, 16:]
-        ball_vel[env_idx, 0] = (torch.rand(size, device=self.device) - 0.5) * 0.1
+
+        # always throw to blue
+        bias = 0.0 if self.bias_to_blue else -0.5
+        scale = 0.3 if self.bias_to_blue else 0.1
+
+        ball_vel[env_idx, 0] = (torch.rand(size, device=self.device) + bias) * scale
         ball_vel[env_idx, 1] = -torch.rand(size, device=self.device) * 2.0
+
+        # randomize ball starting position so the fooseball learns to kick right
+        qpos = wp.to_torch(self.data_d.qpos)
+        ball_pos = qpos[:, 16:]
+        ball_pos[:, 0] += ((torch.rand((self.num_envs, ), device=self.device) -  0.5) * 2.0) * 0.4 # from +- 0.4
+
+        joint_ranges = wp.to_torch(self.model_d.jnt_range)[:, :16, :]
+        min_range = joint_ranges[:, :, 0]
+        max_range = joint_ranges[:, :, 1]
+
+        joint_positions = torch.rand((self.num_envs, 16), device=self.device) * (max_range - min_range) + min_range
+
+        qpos[:, :16] = joint_positions
+
         mjw.forward(self.model_d, self.data_d)
 
     def get_sim_data(self):
+        wp.synchronize()
         mjw.get_data_into(result=self.mjd, mjm=self.mjm, d=self.data_d)
+
+
+class NullPolicy:
+    def __init__(self, device='cuda:0'):
+        self.device =  device
+
+    def get_actions(self, num_envs, obs):
+        return torch.zeros((num_envs, 8), device=self.device)
+
+
+@torch.compile
+def compute_rewards(
+    blue_goals: torch.Tensor,
+    red_goals: torch.Tensor,
+    side: torch.Tensor,
+    ball_pos,
+    blue_goal_center,
+    red_goal_center,
+    out_of_bounds,
+    goal_reward: float,
+    num_envs: int,
+):
+    ## Goal Rewards
+    in_goal = blue_goals | red_goals
+    in_right_goal = ((side == 0) & red_goals) | ((side == 1) & blue_goals)
+    rewards = torch.zeros(num_envs, device=ball_pos.device) # pyright: ignore
+    rewards[in_goal] = torch.where(in_right_goal[in_goal], 3.0*goal_reward, -goal_reward)
+
+    # Distance Penalty
+    blue_side_not_in_goal = ~in_goal & (side == 0)
+    red_side_not_in_goal = ~in_goal & (side == 1)
+
+    blue_dist = torch.clamp(torch.linalg.vector_norm(ball_pos[blue_side_not_in_goal, :] - red_goal_center, dim=1), max=2.0)
+    red_dist = torch.clamp(torch.linalg.vector_norm(ball_pos[red_side_not_in_goal, :] - blue_goal_center, dim=1), max=2.0)
+
+    rewards[blue_side_not_in_goal] = -(blue_dist*blue_dist)
+    rewards[red_side_not_in_goal] = -(red_dist*red_dist)
+
+    # Out of Bounds Penalty
+    rewards[out_of_bounds] = -10.0
+    return rewards

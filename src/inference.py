@@ -9,30 +9,29 @@ wp.config.enable_mathdx_solver = False
 import mujoco
 import mujoco_warp as mjw
 import mujoco.viewer as m_viewer
-from src.env import FoosballEnv
+from env import FoosballEnv
 
 # IMPORTANT: Import your exact training config dictionary here!
-from src.training import train_cfg
+from training import train_cfg
 
 
 def play():
-    device = "cuda:0"
-    env = FoosballEnv(device=device, sync_with_viewer=True)
+    device = "cuda:2"
+    env = FoosballEnv(device=device, sync_with_viewer=True, always_blue=True, bias_to_blue=True)
 
     runner = OnPolicyRunner(env, copy.deepcopy(train_cfg), log_dir="logs/foosball", device=device)
 
 
-    checkpoint = "logs/foosball4/op_5.pt"
+    checkpoint = "logs/model_50.pt"
 
     runner.load(checkpoint)
 
     policy = runner.get_inference_policy(device=device)
-    env.opponent_policy = policy
+    # env.opponent_policy = policy
 
     obs = env.get_observations()
 
     print(f"loaded model {checkpoint}")
-
 
     with torch.no_grad():
         with m_viewer.launch_passive(env.mjm, env.mjd) as viewer:
