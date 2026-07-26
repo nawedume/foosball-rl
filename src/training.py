@@ -82,7 +82,7 @@ if __name__ == "__main__":
                 activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],
                 record_shapes=True,
                 profile_memory=True,
-                with_stack=False # Keep false to prevent JSON bloat
+                with_stack=True
             ) as prof:
                 runner.learn(num_learning_iterations=iterations, init_at_random_ep_len=True)
                 
