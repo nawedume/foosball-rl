@@ -263,7 +263,7 @@
         </body>
 
         <!-- The ball for the table -->
-        <body name="ball" pos="0.02 0.02 0.305539">
+        <body name="ball" pos="0.02 0.02 0.285539">
             <geom name="ball_vis" type="sphere" size="0.02" class="visual" material="checker_material" />
             <geom name="ball_coll" type="sphere" size="0.02" class="ball" mass="0.02" />
             <freejoint name="ballfj" />

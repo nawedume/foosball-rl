@@ -29,6 +29,7 @@ def run_env():
 
     assert actions.shape == (env.num_envs, 8)
     obs, rewards, dones, _ = env.step(actions)
+    print(f"Reward is : {rewards}")
 
     ball_pos_rel = obs["policy"][0, 32:35]
     test_data.append(torch.cat([ball_pos_rel[0:1], ball_pos_rel[1:2], rewards], dim=-1))

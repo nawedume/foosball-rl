@@ -21,13 +21,12 @@ def play():
 
     runner = OnPolicyRunner(env, copy.deepcopy(train_cfg), log_dir="logs/foosball", device=device)
 
-
-    checkpoint = "logs/model_50.pt"
+    checkpoint = "logs/model_4550.pt"
 
     runner.load(checkpoint)
 
     policy = runner.get_inference_policy(device=device)
-    # env.opponent_policy = policy
+    env.op_policy = policy
 
     obs = env.get_observations()
 
@@ -39,6 +38,7 @@ def play():
                 start = time.time()
                 actions = policy(obs)
                 obs, rewards, dones, extras = env.step(actions)
+                print(f"Reward: {rewards}")
                 viewer.sync()
 
                 remaining = env.mjm.opt.timestep - (time.time() - start)
