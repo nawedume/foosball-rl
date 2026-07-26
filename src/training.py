@@ -1,15 +1,19 @@
 import copy
+import os
+import torch
+from torch.profiler import profile, ProfilerActivity
 from rsl_rl.runners import OnPolicyRunner
 from env import FoosballEnv
 import argparse
 
-parser =  argparse.ArgumentParser()
+parser = argparse.ArgumentParser()
 parser.add_argument("--chpt", type=str, help="Checkpoint path", default=None)
 parser.add_argument("--device", type=str, help="Device str", default='cuda:0')
-parser.add_argument("--iter", type=int, help="Number of iterations", default=500)
+parser.add_argument("--iter", type=int, help="Number of iterations", default=3)
 parser.add_argument("--op", type=str, help="Filepath to op policy", default=None)
+parser.add_argument("--profile", action="store_true", help="Run in profiling mode")
+parser.add_argument("--trace_file", type=str, help="Output trace file name", default="foosball_trace.json")
 args_cli = parser.parse_args()
-
 
 train_cfg = {
     "obs_groups": {},
@@ -46,15 +50,15 @@ train_cfg = {
 }
 
 if __name__ == "__main__":
+    print("--- EXECUTING MAIN BLOCK ---")
+    
     device = args_cli.device
+    
+    # Safely reduce environments if profiling to avoid OOM on your RTX 2060
+    env_count = 256 if args_cli.profile else 4096
+    
     # Initialize the environment
-    env = FoosballEnv(num_envs=4096, dt=1.0/60.0, device=device, model="model.xml", always_blue=True, bias_to_blue=True)
-
-    # print("Loading enemy...")
-
-    # temp_runner = OnPolicyRunner(env, copy.deepcopy(train_cfg), log_dir="foosball", device="cuda:0")
-    # temp_runner.load("logs/foosball2/opp_2.pt")
-    # env.opponent_policy = temp_runner.get_inference_policy(device="cuda:0")
+    env = FoosballEnv(num_envs=env_count, dt=1.0/60.0, device=device, model="model.xml", always_blue=True, bias_to_blue=True)
 
     # Initialize the runner
     runner = OnPolicyRunner(env, copy.deepcopy(train_cfg), log_dir="./logs/", device=device)
@@ -65,9 +69,28 @@ if __name__ == "__main__":
         policy = runner.get_inference_policy(device=device)
         env.op_policy = policy
 
-    # runner.load("../drive/MyDrive/logs/foosball4/model_499.pt", map_location="cuda:0")
-    #runner.load("logs/foosball/model_1450.pt")
     print("Starting training block...")
 
-    # Execute the learning loop
-    runner.learn(num_learning_iterations=args_cli.iter, init_at_random_ep_len=True)
+    if args_cli.profile:
+        print(f"PROFILING MODE ENABLED. Environments restricted to {env_count}.")
+        trace_path = os.path.abspath(args_cli.trace_file)
+        
+        iterations = 3 
+        
+        try:
+            with profile(
+                activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],
+                record_shapes=True,
+                profile_memory=True,
+                with_stack=False # Keep false to prevent JSON bloat
+            ) as prof:
+                runner.learn(num_learning_iterations=iterations, init_at_random_ep_len=True)
+                
+        finally:
+            print("Exporting trace... DO NOT press Ctrl+C.")
+            prof.export_chrome_trace(trace_path)
+            print(f"SUCCESS: Trace hard-saved to {trace_path}")
+            
+    else:
+        # Standard execution loop
+        runner.learn(num_learning_iterations=args_cli.iter, init_at_random_ep_len=True)
