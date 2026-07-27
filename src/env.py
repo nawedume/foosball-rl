@@ -11,6 +11,8 @@ import mujoco
 import mujoco_warp as mjw
 import mujoco.viewer as m_viewer
 
+from torch.profiler import record_function
+
 TERMINATION_HEIGHT = 0.15
 
 GOAL_CENTER_BLUE = [0.563284, 0.0, 0.289419]
@@ -84,6 +86,7 @@ class FoosballEnv(VecEnv):
         is_red = self.side == 1
         return self._get_obs(is_red)
 
+    @record_function("observations")
     def _get_obs(self, is_red: torch.Tensor) -> TensorDict:
         q_pos = wp.to_torch(self.data_d.qpos).clone()
         q_vel = wp.to_torch(self.data_d.qvel).clone()
@@ -123,39 +126,43 @@ class FoosballEnv(VecEnv):
         td = TensorDict(ret, batch_size=[self.num_envs], device=self.device)
         return td
 
-
+    @record_function("step")
     def step(self, actions: torch.Tensor) -> tuple[TensorDict, torch.Tensor, torch.Tensor, dict]:
+
         # 1. Action Clamping & Scaling
-        raw_actions = torch.clamp(actions, min=-1.0, max=1.0)
-        scaled_actions = raw_actions * 40.0
+        with record_function("action_clamp and control"):
+            raw_actions = torch.clamp(actions, min=-1.0, max=1.0)
+            scaled_actions = raw_actions * 40.0
 
-        control = wp.to_torch(self.data_d.ctrl)
+            control = wp.to_torch(self.data_d.ctrl)
 
-        is_red = self.side == 1
-        control.zero_()
+            is_red = self.side == 1
+            control.zero_()
 
-        control[is_red, 8:16] = scaled_actions[is_red]
-        control[~is_red, :8] = scaled_actions[~is_red]
+            control[is_red, 8:16] = scaled_actions[is_red]
+            control[~is_red, :8] = scaled_actions[~is_red]
 
-        op_actions = self.op_policy(self._get_obs(self.side == 0)) * 40.0
-        control[is_red, :8] =  op_actions[is_red]
-        control[~is_red, 8:16] = op_actions[~is_red]
+            op_actions = self.op_policy(self._get_obs(self.side == 0)) * 40.0
+            control[is_red, :8] =  op_actions[is_red]
+            control[~is_red, 8:16] = op_actions[~is_red]
 
-        for _ in range(self.decimation):
-            mjw.step(self.model_d, self.data_d)
+        with record_function("MJC step"):
+            for _ in range(self.decimation):
+                mjw.step(self.model_d, self.data_d)
 
-        # wp.synchronize()
-        self.episode_length_buf += 1
+        with record_function("env state and resets"):
+            # wp.synchronize()
+            self.episode_length_buf += 1
 
-        # Environment State & Resets
-        ball_pos = wp.to_torch(self.data_d.xpos)[:, self.ball_id]
-        out_of_bounds = ball_pos[:, 2] <= TERMINATION_HEIGHT
+            # Environment State & Resets
+            ball_pos = wp.to_torch(self.data_d.xpos)[:, self.ball_id]
+            out_of_bounds = ball_pos[:, 2] <= TERMINATION_HEIGHT
 
-        sensor_data = wp.to_torch(self.data_d.sensordata)
-        blue_goals = sensor_data[:, self.blue_goal_sensor_adr] > 0.5
-        red_goals = sensor_data[:, self.red_goal_sensor_adr] > 0.5
+            sensor_data = wp.to_torch(self.data_d.sensordata)
+            blue_goals = sensor_data[:, self.blue_goal_sensor_adr] > 0.5
+            red_goals = sensor_data[:, self.red_goal_sensor_adr] > 0.5
 
-        ball_vel = wp.to_torch(self.data_d.qvel)[:, 16:19]
+            ball_vel = wp.to_torch(self.data_d.qvel)[:, 16:19]
 
         rewards = compute_rewards(
             blue_goals,
@@ -170,19 +177,20 @@ class FoosballEnv(VecEnv):
             self.num_envs,
         )
 
-        time_outs = (self.episode_length_buf > self.max_episode_length).bool()
-        dones =  time_outs | out_of_bounds | blue_goals | red_goals
-        self.episode_length_buf[dones] = 0
-        if dones.any():
-            self._reset(dones)
+        with record_function("post reward"):
+            time_outs = (self.episode_length_buf > self.max_episode_length).bool()
+            dones =  time_outs | out_of_bounds | blue_goals | red_goals
+            self.episode_length_buf[dones] = 0
+            if dones.any():
+                self._reset(dones)
 
-        obs = self.get_observations()
+            obs = self.get_observations()
 
-        if self.sync_with_viewer:
-            self.get_sim_data()
+            if self.sync_with_viewer:
+                self.get_sim_data()
 
         return obs, rewards, dones, { 'time_outs': time_outs }
-
+    @record_function("reset")
     def _reset(self, dones: torch.Tensor | None = None):
         if dones is None:
             env_idx = slice(None)
@@ -235,7 +243,7 @@ class NullPolicy:
     def __call__(self, obs):
         return torch.zeros((self.num_envs, 8), device=self.device)
 
-
+@record_function("reward")
 @torch.compile
 def compute_rewards(
     blue_goals: torch.Tensor,

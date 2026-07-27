@@ -75,16 +75,17 @@ if __name__ == "__main__":
         print(f"PROFILING MODE ENABLED. Environments restricted to {env_count}.")
         trace_path = os.path.abspath(args_cli.trace_file)
         
-        iterations = 3 
+        iterations = 3
         
         try:
             with profile(
                 activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],
                 record_shapes=True,
                 profile_memory=True,
-                with_stack=True
             ) as prof:
                 runner.learn(num_learning_iterations=iterations, init_at_random_ep_len=True)
+        except Exception as e:
+            print(f"Could not Profile: {e}")
                 
         finally:
             print("Exporting trace... DO NOT press Ctrl+C.")
