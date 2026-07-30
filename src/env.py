@@ -83,6 +83,15 @@ class FoosballEnv(VecEnv):
 
         self._reset(None)
 
+        mjw.step(self.model_d, self.data_d)
+        wp.synchronize()
+
+        # 2. Record the exact decimation sequence into a hardware graph
+        wp.capture_begin()
+        for _ in range(self.decimation):
+            mjw.step(self.model_d, self.data_d)
+        self.step_graph = wp.capture_end()
+
     def get_observations(self) -> TensorDict:
         is_red = self.side == 1
         return self._get_obs(is_red)
@@ -150,10 +159,9 @@ class FoosballEnv(VecEnv):
         with record_function("Decimation loop"):
             for _ in range(self.decimation):
                 with record_function("MJW step"):
-                    mjw.step(self.model_d, self.data_d)
+                    wp.capture_launch(self.step_graph)
 
         with record_function("env state and resets"):
-            # wp.synchronize()
             self.episode_length_buf += 1
 
             # Environment State & Resets
@@ -233,9 +241,18 @@ class FoosballEnv(VecEnv):
         with record_function("randomize ball starting pos"):
             qpos = wp.to_torch(self.data_d.qpos)
             
+            # 1. Get the default starting positions from the XML
+            qpos0 = wp.to_torch(self.model_d.qpos0)
+            
+            # 2. Hard-reset the ball's X, Y, and Z to the table center FIRST
+            # Notice the `0,` here so we slice the coordinates, not the batch!
+            qpos[env_ids, 16:19] = qpos0[0, 16:19]
+            
+            # 3. Now generate and apply the random scatter
             pos_offset_x = ((torch.rand((size, 1), device=self.device) - 0.5) * 2.0) * 0.4
             pos_offset_y = ((torch.rand((size, 1), device=self.device) - 0.5) * 2.0) * 0.3
 
+            # Apply scatter to the freshly centered ball
             qpos[env_ids, 16:17] += pos_offset_x
             qpos[env_ids, 17:18] += pos_offset_y
         

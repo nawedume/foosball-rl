@@ -17,7 +17,7 @@ from training import train_cfg
 
 def play():
     device = "cuda:0"
-    env = FoosballEnv(device=device, sync_with_viewer=True, always_blue=True, bias_to_blue=True)
+    env = FoosballEnv(device=device, sync_with_viewer=True, always_blue=True, bias_to_blue=True, dt=1/20)
 
     runner = OnPolicyRunner(env, copy.deepcopy(train_cfg), log_dir="logs/foosball", device=device)
 
