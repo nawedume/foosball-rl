@@ -76,6 +76,12 @@ class FoosballEnv(VecEnv):
 
         self.goal_reward = 300.0
 
+        self.qpos_tensor = wp.to_torch(self.data_d.qpos)
+        self.qvel_tensor = wp.to_torch(self.data_d.qvel)
+        
+        # A single fixed block of memory we overwrite on every step
+        self.obs_buf = torch.zeros((self.num_envs, 39), dtype=torch.float32, device=self.device)
+
         if op_policy is None:
             self.op_policy = NullPolicy(self.num_envs, device=self.device)
         else:
@@ -98,43 +104,45 @@ class FoosballEnv(VecEnv):
 
     @record_function("observations")
     def _get_obs(self, is_red: torch.Tensor) -> TensorDict:
-        q_pos = wp.to_torch(self.data_d.qpos).clone()
-        q_vel = wp.to_torch(self.data_d.qvel).clone()
+        is_red_mask = is_red.unsqueeze(1)
+        
+        # ZERO-SYNC: Vectorized sign multiplier replaces boolean indexing
+        sign = torch.where(is_red_mask, -1.0, 1.0)
 
-        # Relative ball positions and velocities
-        ball_pos_rel = q_pos[:, 16:19].clone()
-        ball_pos_rel[:, :3] = torch.where(
-            is_red.unsqueeze(1),
-            ball_pos_rel[:, :3] - self.red_goal_center,
-            ball_pos_rel[:, :3] - self.blue_goal_center
+        # ---------------------------------------------------------
+        # 1. PLAYER & OPPONENT ROD STATES (No torch.cat)
+        # ---------------------------------------------------------
+        # Player POS and VEL (Indices 0 to 15)
+        self.obs_buf[:, :8] = torch.where(is_red_mask, self.qpos_tensor[:, 8:16], self.qpos_tensor[:, :8])
+        self.obs_buf[:, 8:16] = torch.where(is_red_mask, self.qvel_tensor[:, 8:16], self.qvel_tensor[:, :8])
+
+        # Opponent POS and VEL (Indices 16 to 31)
+        self.obs_buf[:, 16:24] = torch.where(is_red_mask, self.qpos_tensor[:, :8], self.qpos_tensor[:, 8:16])
+        self.obs_buf[:, 24:32] = torch.where(is_red_mask, self.qvel_tensor[:, :8], self.qvel_tensor[:, 8:16])
+
+        # ---------------------------------------------------------
+        # 2. BALL POS & VELOCITY (Zero-Sync, No .clone())
+        # ---------------------------------------------------------
+        # Calculate relative position directly into the buffer (Indices 32 to 34)
+        self.obs_buf[:, 32:35] = torch.where(
+            is_red_mask,
+            self.qpos_tensor[:, 16:19] - self.red_goal_center,
+            self.qpos_tensor[:, 16:19] - self.blue_goal_center
         )
+        
+        # In-place sign multiplier entirely replaces ball_pos_rel[is_red, 0] = ...
+        self.obs_buf[:, 32:34].mul_(sign) 
 
-        # Mirror BOTH X and Y axes for Red so left/right and forward/backward match perspective
-        ball_pos_rel[is_red, 0] = -ball_pos_rel[is_red, 0]
-        ball_pos_rel[is_red, 1] = -ball_pos_rel[is_red, 1]
+        # Copy velocity directly into the buffer (Indices 35 to 37)
+        self.obs_buf[:, 35:38] = self.qvel_tensor[:, 16:19]
+        self.obs_buf[:, 35:37].mul_(sign) 
 
-        ball_vel_rel = q_vel[:, 16:19].clone()
-        ball_vel_rel[is_red, 0] = -ball_vel_rel[is_red, 0]
-        ball_vel_rel[is_red, 1] = -ball_vel_rel[is_red, 1]
+        # ---------------------------------------------------------
+        # 3. SIDE MARKER
+        # ---------------------------------------------------------
+        self.obs_buf[:, 38] = is_red.to(torch.float)
 
-        # Rod states
-        blue_pos = q_pos[:, :8]
-        blue_vel = q_vel[:, :8]
-        blue_state = torch.cat([blue_pos, blue_vel], dim=-1)
-
-        red_pos = q_pos[:, 8:16]
-        red_vel = q_vel[:, 8:16]
-        # Negate Red's rod state so positive values represent forward tilt/movement from Red's view
-        red_state = torch.cat([red_pos, red_vel], dim=-1)
-
-        player_rod_state = torch.where(is_red.unsqueeze(1), red_state, blue_state)
-        op_rod_state = torch.where(is_red.unsqueeze(1), blue_state, red_state)
-
-        data = torch.cat([player_rod_state, op_rod_state, ball_pos_rel, ball_vel_rel, is_red.to(torch.float).unsqueeze(1)], dim=1)
-
-        ret = {"policy": data}
-        td = TensorDict(ret, batch_size=[self.num_envs], device=self.device)
-        return td
+        return TensorDict({"policy": self.obs_buf}, batch_size=[self.num_envs], device=self.device)
 
     @record_function("step")
     def step(self, actions: torch.Tensor) -> tuple[TensorDict, torch.Tensor, torch.Tensor, dict]:
