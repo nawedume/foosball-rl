@@ -16,12 +16,12 @@ from training import train_cfg
 
 
 def play():
-    device = "cuda:2"
+    device = "cuda:0"
     env = FoosballEnv(device=device, sync_with_viewer=True, always_blue=True, bias_to_blue=True)
 
     runner = OnPolicyRunner(env, copy.deepcopy(train_cfg), log_dir="logs/foosball", device=device)
 
-    checkpoint = "logs/model_4550.pt"
+    checkpoint = "logs/model_0.pt"
 
     runner.load(checkpoint)
 

@@ -1,3 +1,4 @@
+from warp import record_event
 from rsl_rl.env import VecEnv
 from dataclasses import dataclass
 from tensordict import TensorDict
@@ -5,7 +6,7 @@ import torch
 import time
 import warp as wp
 
-wp.config.enable_mathdx_solver = False
+wp.config.enable_mathdx_solver = True
 
 import mujoco
 import mujoco_warp as mjw
@@ -146,9 +147,10 @@ class FoosballEnv(VecEnv):
             control[is_red, :8] =  op_actions[is_red]
             control[~is_red, 8:16] = op_actions[~is_red]
 
-        with record_function("MJC step"):
+        with record_function("Decimation loop"):
             for _ in range(self.decimation):
-                mjw.step(self.model_d, self.data_d)
+                with record_function("MJW step"):
+                    mjw.step(self.model_d, self.data_d)
 
         with record_function("env state and resets"):
             # wp.synchronize()
@@ -190,45 +192,31 @@ class FoosballEnv(VecEnv):
                 self.get_sim_data()
 
         return obs, rewards, dones, { 'time_outs': time_outs }
+
     @record_function("reset")
-    def _reset(self, dones: torch.Tensor | None = None):
-        if dones is None:
-            env_idx = slice(None)
-            self.side[env_idx] = torch.randint(0, 2, size=(self.num_envs,), dtype=torch.int8, device=self.device)
-            size = self.num_envs
-        else:
-            size = int(dones.sum().item())
-            self.side[dones] = torch.randint(0, 2, size=(size,), dtype=torch.int8, device=self.device)
-            mjw.reset_data(self.model_d, self.data_d, reset=wp.from_torch(dones))
-            env_idx = dones
+    def _reset(self, env_ids: torch.Tensor | None = None):
+    
+        # --- THE BULLETPROOF GATEKEEPER ---
+        if env_ids is None:
+            # First initialization: reset everything
+            env_ids = torch.arange(self.num_envs, device=self.device)
+        elif env_ids.dtype == torch.bool:
+            # Catch the error: If you accidentally passed the `dones` mask,
+            # instantly convert it to integer indices so the math sizes perfectly.
+            env_ids = env_ids.nonzero(as_tuple=False).squeeze(-1)
+            
+        size = len(env_ids)
 
-        if self.always_blue:
-            self.side[env_idx] = 0
+        with record_function("manual state scrub"):
+            qvel = wp.to_torch(self.data_d.qvel)
+            ctrl = wp.to_torch(self.data_d.ctrl)
 
-        qvel = wp.to_torch(self.data_d.qvel)
-        ball_vel = qvel[:, 16:19]
+            # Scrub momentum and forces ONLY for the envs that finished
+            qvel[env_ids, :16] = 0.0
+            qvel[env_ids, 18] = 0.0
+            ctrl[env_ids, :16] = 0.0
 
-        # always throw to blue
-        bias = 0.0 if self.bias_to_blue else -0.5
-        scale = 0.3 if self.bias_to_blue else 0.1
-
-        ball_vel[env_idx, 0] = (torch.rand(size, device=self.device) + bias) * scale
-        ball_vel[env_idx, 1] = -torch.rand(size, device=self.device) * 2.0
-
-        # randomize ball starting position so the fooseball learns to kick right
-        qpos = wp.to_torch(self.data_d.qpos)
-        qpos[env_idx, 16:17] += ((torch.rand((size, 1), device=self.device) -  0.5) * 2.0) * 0.4 # from +- 0.4
-        qpos[env_idx, 17:18] += ((torch.rand((size, 1), device=self.device) -  0.5) * 2.0) * 0.3 # from +- 0.3
-
-        joint_ranges = wp.to_torch(self.model_d.jnt_range)[0, :16, :]
-        min_range = joint_ranges[:, 0]
-        max_range = joint_ranges[:, 1]
-
-        joint_positions = torch.rand((size, 16), device=self.device) * (max_range - min_range) + min_range
-
-        qpos[env_idx, :16] = joint_positions
-
-        mjw.forward(self.model_d, self.data_d)
+        # ... [The rest of your _reset function stays exactly the same] ...
 
     def get_sim_data(self):
         wp.synchronize()
@@ -244,7 +232,7 @@ class NullPolicy:
         return torch.zeros((self.num_envs, 8), device=self.device)
 
 @record_function("reward")
-@torch.compile
+#@torch.compile
 def compute_rewards(
     blue_goals: torch.Tensor,
     red_goals: torch.Tensor,

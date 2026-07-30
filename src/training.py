@@ -75,7 +75,7 @@ if __name__ == "__main__":
         print(f"PROFILING MODE ENABLED. Environments restricted to {env_count}.")
         trace_path = os.path.abspath(args_cli.trace_file)
         
-        iterations = 3
+        iterations = 1
         
         try:
             with profile(
