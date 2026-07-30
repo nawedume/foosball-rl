@@ -196,16 +196,17 @@ class FoosballEnv(VecEnv):
     @record_function("reset")
     def _reset(self, env_ids: torch.Tensor | None = None):
     
-        # --- THE BULLETPROOF GATEKEEPER ---
+
         if env_ids is None:
-            # First initialization: reset everything
             env_ids = torch.arange(self.num_envs, device=self.device)
         elif env_ids.dtype == torch.bool:
-            # Catch the error: If you accidentally passed the `dones` mask,
-            # instantly convert it to integer indices so the math sizes perfectly.
             env_ids = env_ids.nonzero(as_tuple=False).squeeze(-1)
             
         size = len(env_ids)
+        
+        # If no environments are done, exit immediately to save GPU cycles
+        if size == 0:
+            return
 
         with record_function("manual state scrub"):
             qvel = wp.to_torch(self.data_d.qvel)
@@ -216,7 +217,35 @@ class FoosballEnv(VecEnv):
             qvel[env_ids, 18] = 0.0
             ctrl[env_ids, :16] = 0.0
 
-        # ... [The rest of your _reset function stays exactly the same] ...
+        with record_function("set sides done"):
+            new_side = torch.randint(0, 2, size=(size,), dtype=torch.int8, device=self.device)
+            if self.always_blue:
+                new_side.zero_()
+            self.side[env_ids] = new_side
+
+        with record_function("ball vel setup"):
+            bias = 0.0 if self.bias_to_blue else -0.5
+            scale = 0.3 if self.bias_to_blue else 0.1
+
+            qvel[env_ids, 16] = (torch.rand(size, device=self.device) + bias) * scale
+            qvel[env_ids, 17] = -torch.rand(size, device=self.device) * 2.0
+
+        with record_function("randomize ball starting pos"):
+            qpos = wp.to_torch(self.data_d.qpos)
+            
+            pos_offset_x = ((torch.rand((size, 1), device=self.device) - 0.5) * 2.0) * 0.4
+            pos_offset_y = ((torch.rand((size, 1), device=self.device) - 0.5) * 2.0) * 0.3
+
+            qpos[env_ids, 16:17] += pos_offset_x
+            qpos[env_ids, 17:18] += pos_offset_y
+        
+        with record_function("joint ranges"):
+            joint_ranges = wp.to_torch(self.model_d.jnt_range)[0, :16, :]
+            min_range = joint_ranges[:, 0]
+            max_range = joint_ranges[:, 1]
+
+            joint_positions = torch.rand((size, 16), device=self.device) * (max_range - min_range) + min_range
+            qpos[env_ids, :16] = joint_positions
 
     def get_sim_data(self):
         wp.synchronize()
