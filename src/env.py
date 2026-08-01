@@ -169,16 +169,33 @@ class FoosballEnv(VecEnv):
 
         with record_function("post reward"):
             time_outs = (self.episode_length_buf > self.max_episode_length).bool()
-            dones =  time_outs | out_of_bounds | blue_goals | red_goals
-            self.episode_length_buf[dones] = 0
-            if dones.any():
-                self._reset(dones)
+            dones = time_outs | out_of_bounds | blue_goals | red_goals
+            
+            # Zero-Sync: Replace indexing (self.episode_length_buf[dones] = 0) with where
+            self.episode_length_buf = torch.where(dones, 0, self.episode_length_buf)
+
+            # Get static memory views
+            qpos = wp.to_torch(self.data_d.qpos)
+            qvel = wp.to_torch(self.data_d.qvel)
+            ctrl = wp.to_torch(self.data_d.ctrl)
+            qpos0 = wp.to_torch(self.model_d.qpos0)
+            joint_ranges = wp.to_torch(self.model_d.jnt_range)[0, :16, :]
+            
+            # Execute fused resets unconditionally
+            compute_resets(
+                dones,
+                qpos,
+                qvel,
+                ctrl,
+                self.side,
+                qpos0,
+                joint_ranges[:, 0],
+                joint_ranges[:, 1],
+                self.always_blue,
+                self.bias_to_blue
+            )
 
             obs = self.get_observations()
-
-            if self.sync_with_viewer:
-                self.get_sim_data()
-
         return obs, rewards, dones, { 'time_outs': time_outs }
 
     @record_function("reset")
@@ -334,3 +351,57 @@ def compute_observations(
     obs_buf[:, 38] = is_red.to(torch.float)
 
     return obs_buf
+
+
+@torch.compile
+def compute_resets(
+    dones: torch.Tensor,
+    qpos: torch.Tensor,
+    qvel: torch.Tensor,
+    ctrl: torch.Tensor,
+    side: torch.Tensor,
+    qpos0: torch.Tensor,
+    min_range: torch.Tensor,
+    max_range: torch.Tensor,
+    always_blue: bool,
+    bias_to_blue: bool
+):
+    num_envs = dones.shape[0]
+    dones_mask = dones.unsqueeze(1)
+
+    # 1. Scrub momentum and forces
+    qvel[:, :16] = torch.where(dones_mask, 0.0, qvel[:, :16])
+    qvel[:, 18] = torch.where(dones, 0.0, qvel[:, 18]) 
+    ctrl[:, :16] = torch.where(dones_mask, 0.0, ctrl[:, :16])
+
+    # 2. Set sides
+    new_side = torch.randint(0, 2, size=(num_envs,), dtype=torch.int8, device=dones.device)
+    if always_blue:
+        new_side.zero_()
+    side.copy_(torch.where(dones, new_side, side))
+
+    # 3. Ball vel setup
+    bias = 0.0 if bias_to_blue else -0.5
+    scale = 0.3 if bias_to_blue else 0.1
+    
+    new_qvel_16 = (torch.rand(num_envs, device=dones.device) + bias) * scale
+    new_qvel_17 = -torch.rand(num_envs, device=dones.device) * 2.0
+    
+    qvel[:, 16] = torch.where(dones, new_qvel_16, qvel[:, 16])
+    qvel[:, 17] = torch.where(dones, new_qvel_17, qvel[:, 17])
+
+    # 4. Ball starting pos setup
+    new_qpos_16_19 = qpos0[0, 16:19].expand(num_envs, 3).clone()
+    pos_offset_x = ((torch.rand((num_envs, 1), device=dones.device) - 0.5) * 2.0) * 0.4
+    pos_offset_y = ((torch.rand((num_envs, 1), device=dones.device) - 0.5) * 2.0) * 0.3
+    
+    new_qpos_16_19[:, 0:1] += pos_offset_x
+    new_qpos_16_19[:, 1:2] += pos_offset_y
+    
+    qpos[:, 16:19] = torch.where(dones_mask, new_qpos_16_19, qpos[:, 16:19])
+
+    # 5. Joint ranges
+    joint_positions = torch.rand((num_envs, 16), device=dones.device) * (max_range - min_range) + min_range
+    qpos[:, :16] = torch.where(dones_mask, joint_positions, qpos[:, :16])
+
+
