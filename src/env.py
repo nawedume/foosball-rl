@@ -104,43 +104,14 @@ class FoosballEnv(VecEnv):
 
     @record_function("observations")
     def _get_obs(self, is_red: torch.Tensor) -> TensorDict:
-        is_red_mask = is_red.unsqueeze(1)
-        
-        # ZERO-SYNC: Vectorized sign multiplier replaces boolean indexing
-        sign = torch.where(is_red_mask, -1.0, 1.0)
-
-        # ---------------------------------------------------------
-        # 1. PLAYER & OPPONENT ROD STATES (No torch.cat)
-        # ---------------------------------------------------------
-        # Player POS and VEL (Indices 0 to 15)
-        self.obs_buf[:, :8] = torch.where(is_red_mask, self.qpos_tensor[:, 8:16], self.qpos_tensor[:, :8])
-        self.obs_buf[:, 8:16] = torch.where(is_red_mask, self.qvel_tensor[:, 8:16], self.qvel_tensor[:, :8])
-
-        # Opponent POS and VEL (Indices 16 to 31)
-        self.obs_buf[:, 16:24] = torch.where(is_red_mask, self.qpos_tensor[:, :8], self.qpos_tensor[:, 8:16])
-        self.obs_buf[:, 24:32] = torch.where(is_red_mask, self.qvel_tensor[:, :8], self.qvel_tensor[:, 8:16])
-
-        # ---------------------------------------------------------
-        # 2. BALL POS & VELOCITY (Zero-Sync, No .clone())
-        # ---------------------------------------------------------
-        # Calculate relative position directly into the buffer (Indices 32 to 34)
-        self.obs_buf[:, 32:35] = torch.where(
-            is_red_mask,
-            self.qpos_tensor[:, 16:19] - self.red_goal_center,
-            self.qpos_tensor[:, 16:19] - self.blue_goal_center
-        )
-        
-        # In-place sign multiplier entirely replaces ball_pos_rel[is_red, 0] = ...
-        self.obs_buf[:, 32:34].mul_(sign) 
-
-        # Copy velocity directly into the buffer (Indices 35 to 37)
-        self.obs_buf[:, 35:38] = self.qvel_tensor[:, 16:19]
-        self.obs_buf[:, 35:37].mul_(sign) 
-
-        # ---------------------------------------------------------
-        # 3. SIDE MARKER
-        # ---------------------------------------------------------
-        self.obs_buf[:, 38] = is_red.to(torch.float)
+        self.obs_buf = compute_observations(
+                    self.obs_buf,
+                    self.qpos_tensor,
+                    self.qvel_tensor,
+                    is_red,
+                    self.red_goal_center,
+                    self.blue_goal_center
+                )
 
         return TensorDict({"policy": self.obs_buf}, batch_size=[self.num_envs], device=self.device)
 
@@ -182,18 +153,19 @@ class FoosballEnv(VecEnv):
 
             ball_vel = wp.to_torch(self.data_d.qvel)[:, 16:19]
 
-        rewards = compute_rewards(
-            blue_goals,
-            red_goals,
-            self.side,
-            ball_pos,
-            ball_vel,
-            self.blue_goal_center,
-            self.red_goal_center,
-            out_of_bounds,
-            self.goal_reward,
-            self.num_envs,
-        )
+        with record_function("reward_func"):
+            rewards = compute_rewards(
+                blue_goals,
+                red_goals,
+                self.side,
+                ball_pos,
+                ball_vel,
+                self.blue_goal_center,
+                self.red_goal_center,
+                out_of_bounds,
+                self.goal_reward,
+                self.num_envs,
+            )
 
         with record_function("post reward"):
             time_outs = (self.episode_length_buf > self.max_episode_length).bool()
@@ -285,8 +257,7 @@ class NullPolicy:
     def __call__(self, obs):
         return torch.zeros((self.num_envs, 8), device=self.device)
 
-@record_function("reward")
-#@torch.compile
+@torch.compile(mode="reduce-overhead")
 def compute_rewards(
     blue_goals: torch.Tensor,
     red_goals: torch.Tensor,
@@ -302,16 +273,14 @@ def compute_rewards(
     ## Goal Rewards
     in_goal = blue_goals | red_goals
     in_right_goal = ((side == 0) & red_goals) | ((side == 1) & blue_goals)
-    rewards = torch.zeros(num_envs, device=ball_pos.device) # pyright: ignore
-    rewards[in_goal] = torch.where(in_right_goal[in_goal], 1.5*goal_reward, -goal_reward)
+    
+    rewards = torch.zeros(num_envs, device=ball_pos.device)
+    
+    # ZERO-SYNC: Replace boolean assignments with mathematical masking
+    goal_rewards_vals = torch.where(in_right_goal, 1.5 * goal_reward, -goal_reward)
+    rewards = torch.where(in_goal, goal_rewards_vals, rewards)
 
-    # Distance Penalty
-    # blue_side_not_in_goal = ~in_goal & (side == 0)
-    # red_side_not_in_goal = ~in_goal & (side == 1)
     is_blue = (side == 0).unsqueeze(1)
-
-    # blue_dist = torch.clamp(torch.linalg.vector_norm(ball_pos[blue_side_not_in_goal, :] - red_goal_center, dim=1), max=2.0)
-    # red_dist = torch.clamp(torch.linalg.vector_norm(ball_pos[red_side_not_in_goal, :] - blue_goal_center, dim=1), max=2.0)
 
     dist_vec = torch.where(is_blue, ball_pos - red_goal_center, ball_pos - blue_goal_center)
     dist = torch.linalg.vector_norm(dist_vec, dim=1)
@@ -320,12 +289,48 @@ def compute_rewards(
     target_dir = target_dir[:, :2]
     vel_reward = torch.linalg.vecdot(ball_vel[:, :2], -target_dir[:, :2], dim=1) * 0.28
 
-    # rewards[blue_side_not_in_goal] = -(blue_dist*blue_dist)
-    # rewards[red_side_not_in_goal] = -(red_dist*red_dist)
-    # dist_reward = -torch.clamp(dist, max=2.0).square()
+    rewards += vel_reward 
 
-    rewards += vel_reward # dist_reward + vel_reward
-
-    # Out of Bounds Penalty
-    rewards[out_of_bounds] += -300.0
+    # Out of Bounds Penalty (ZERO-SYNC)
+    rewards -= out_of_bounds.to(torch.float) * 300.0
+    
     return rewards
+
+@torch.compile()
+def compute_observations(
+    obs_buf: torch.Tensor,
+    qpos: torch.Tensor,
+    qvel: torch.Tensor,
+    is_red: torch.Tensor,
+    red_goal_center: torch.Tensor,
+    blue_goal_center: torch.Tensor,
+) -> torch.Tensor:
+    
+    is_red_mask = is_red.unsqueeze(1)
+    
+    # ZERO-SYNC: Vectorized sign multiplier replaces boolean indexing
+    sign = torch.where(is_red_mask, -1.0, 1.0)
+
+    # 1. PLAYER & OPPONENT ROD STATES
+    obs_buf[:, :8] = torch.where(is_red_mask, qpos[:, 8:16], qpos[:, :8])
+    obs_buf[:, 8:16] = torch.where(is_red_mask, qvel[:, 8:16], qvel[:, :8])
+
+    obs_buf[:, 16:24] = torch.where(is_red_mask, qpos[:, :8], qpos[:, 8:16])
+    obs_buf[:, 24:32] = torch.where(is_red_mask, qvel[:, :8], qvel[:, 8:16])
+
+    # 2. BALL POS & VELOCITY
+    obs_buf[:, 32:35] = torch.where(
+        is_red_mask,
+        qpos[:, 16:19] - red_goal_center,
+        qpos[:, 16:19] - blue_goal_center
+    )
+    
+    obs_buf[:, 32:34] *= sign 
+
+    obs_buf[:, 35:38] = qvel[:, 16:19]
+    obs_buf[:, 35:37] *= sign 
+
+    # 3. SIDE MARKER
+    obs_buf[:, 38] = is_red.to(torch.float)
+
+    return obs_buf
