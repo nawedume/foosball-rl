@@ -118,22 +118,25 @@ class FoosballEnv(VecEnv):
     @record_function("step")
     def step(self, actions: torch.Tensor) -> tuple[TensorDict, torch.Tensor, torch.Tensor, dict]:
 
-        # 1. Action Clamping & Scaling
+        # Tell PyTorch it's safe to recycle the CUDA graph memory
+        torch.compiler.cudagraph_mark_step_begin()
+
+        # 1. Action Clamping & Control
         with record_function("action_clamp and control"):
-            raw_actions = torch.clamp(actions, min=-1.0, max=1.0)
-            scaled_actions = raw_actions * 40.0
-
-            control = wp.to_torch(self.data_d.ctrl)
-
-            is_red = self.side == 1
-            control.zero_()
-
-            control[is_red, 8:16] = scaled_actions[is_red]
-            control[~is_red, :8] = scaled_actions[~is_red]
-
+            
+            # Run opponent policy outside the compiled block
             op_actions = self.op_policy(self._get_obs(self.side == 0)) * 40.0
-            control[is_red, :8] =  op_actions[is_red]
-            control[~is_red, 8:16] = op_actions[~is_red]
+            
+            # Extract static memory view from Warp
+            control = wp.to_torch(self.data_d.ctrl)
+            
+            # Execute compiled, fused math
+            compute_controls(
+                control, 
+                actions, 
+                op_actions, 
+                self.side == 1
+            )
 
         with record_function("Decimation loop"):
             for _ in range(self.decimation):
@@ -405,3 +408,21 @@ def compute_resets(
     qpos[:, :16] = torch.where(dones_mask, joint_positions, qpos[:, :16])
 
 
+@torch.compile
+def compute_controls(
+    control: torch.Tensor,
+    actions: torch.Tensor,
+    op_actions: torch.Tensor,
+    is_red: torch.Tensor
+):
+    # 1. Clamp and scale in one fused operation
+    scaled_actions = torch.clamp(actions, min=-1.0, max=1.0) * 40.0
+    
+    is_red_mask = is_red.unsqueeze(1)
+    
+    # 2. Zero out previous control signals
+    control.zero_()
+    
+    # 3. ZERO-SYNC: Player gets indices based on their side, Opponent gets the rest
+    control[:, 0:8] = torch.where(is_red_mask, op_actions, scaled_actions)
+    control[:, 8:16] = torch.where(is_red_mask, scaled_actions, op_actions)
