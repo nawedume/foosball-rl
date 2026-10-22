@@ -11,12 +11,24 @@ dependencies = [
     "warp-lang>=1.15.0",
 ]
 
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.ty.environment]
+extra-paths = ["./typings"]
+
+
 [tool.ruff.lint]
 ignore = ["ALL"]
 
 [dependency-groups]
 dev = [
     "marimo>=0.23.15",
+    "pybind11-stubgen>=3.0.0",
 ]
 test = [
     "pillow>=12.3.0",

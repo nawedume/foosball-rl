@@ -371,7 +371,7 @@ wheels = [
 [[package]]
 name = "fooseball-sim"
 version = "0.1.0"
-source = { virtual = "." }
+source = { editable = "." }
 dependencies = [
     { name = "matplotlib" },
     { name = "mujoco-warp" },
@@ -382,6 +382,7 @@ dependencies = [
 [package.dev-dependencies]
 dev = [
     { name = "marimo" },
+    { name = "pybind11-stubgen" },
 ]
 test = [
     { name = "pillow" },
@@ -397,7 +398,10 @@ requires-dist = [
 ]
 
 [package.metadata.requires-dev]
-dev = [{ name = "marimo", specifier = ">=0.23.15" }]
+dev = [
+    { name = "marimo", specifier = ">=0.23.15" },
+    { name = "pybind11-stubgen", specifier = ">=3.0.0" },
+]
 test = [
     { name = "pillow", specifier = ">=12.3.0" },
     { name = "pytest", specifier = ">=9.1.1" },
@@ -1470,6 +1474,15 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/04/78/0acd37ca84ce3ddffaa92ef0f571e073faa6d8ff1f0559ab1272188ea2be/psutil-7.2.2-cp36-abi3-musllinux_1_2_x86_64.whl", hash = "sha256:b58fabe35e80b264a4e3bb23e6b96f9e45a3df7fb7eed419ac0e5947c61e47cc", size = 148266, upload-time = "2026-01-28T18:15:31.597Z" },
     { url = "https://files.pythonhosted.org/packages/b4/90/e2159492b5426be0c1fef7acba807a03511f97c5f86b3caeda6ad92351a7/psutil-7.2.2-cp37-abi3-win_amd64.whl", hash = "sha256:eb7e81434c8d223ec4a219b5fc1c47d0417b12be7ea866e24fb5ad6e84b3d988", size = 137737, upload-time = "2026-01-28T18:15:33.849Z" },
     { url = "https://files.pythonhosted.org/packages/8c/c7/7bb2e321574b10df20cbde462a94e2b71d05f9bbda251ef27d104668306a/psutil-7.2.2-cp37-abi3-win_arm64.whl", hash = "sha256:8c233660f575a5a89e6d4cb65d9f938126312bca76d8fe087b947b3a1aaac9ee", size = 134617, upload-time = "2026-01-28T18:15:36.514Z" },
+]
+
+[[package]]
+name = "pybind11-stubgen"
+version = "3.0.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/57/0a/c53a6d5300a2f9b7a11901a581e73bf81e00cce3053ce28b9b26e5cdd095/pybind11_stubgen-3.0.0.tar.gz", hash = "sha256:b0a908ae99204e201a5148c17dc3cb789021a339ab9dc1d0517a23a87490204c", size = 33753, upload-time = "2026-09-25T04:26:05.424Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/ba/3b/16552e13615e8ee120338b2121642d5f0eeee7736e98f95c842d3cc83191/pybind11_stubgen-3.0.0-py3-none-any.whl", hash = "sha256:859b7b7dbd31d00f722f19152216b5506e8a5d3fdf586944de0cade80f972298", size = 39719, upload-time = "2026-09-25T04:26:03.926Z" },
 ]
 
 [[package]]
