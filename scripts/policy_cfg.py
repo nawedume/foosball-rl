@@ -1,7 +1,7 @@
 train_cfg = {
     "obs_groups": {},
-    "num_steps_per_env": 128,
-    "save_interval": 50,
+    "num_steps_per_env": 64,
+    "save_interval": 25,
     "algorithm": {
         "class_name": "PPO",
         "value_loss_coef": 1.0,

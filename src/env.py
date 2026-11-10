@@ -1,3 +1,4 @@
+from ctypes import alignment
 from numpy.core.multiarray import dtype
 from rsl_rl.env import VecEnv
 from dataclasses import dataclass
@@ -6,8 +7,6 @@ import torch
 import time
 import warp as wp
 import numpy as np
-
-wp.config.enable_mathdx_solver = False
 
 import mujoco
 import mujoco_warp as mjw
@@ -22,38 +21,31 @@ GOAL_CENTER_RED = [-0.550284, 0.0, 0.289419]
 def set_random_ball_position_to_player(
     envs: wp.array[wp.int32],
     ball_idx: wp.int32,
-    geom_xpos: wp.array2d[wp.vec3f],
-    sides: wp.array[wp.bool],
     seed: wp.int32,
-    geom_size: wp.uint32,
-    blue_ids: wp.array[wp.uint16],
-    red_ids: wp.array[wp.uint16],
+    step: wp.int32,
+    is_blue: wp.array[wp.bool],
+    ball_start_pos: wp.array[wp.vec3], # size of number of sites
+    ball_start_line_length: wp.float32,
     out_xpos: wp.array2d[wp.float32],
 ):
     env_idx = envs[wp.tid()]
-    side = sides[env_idx]
 
-    rng = wp.rand_init(seed, env_idx)
-    ridx = wp.randu(rng, wp.uint32(0), geom_size)
+    num_sites = wp.uint32(ball_start_pos.shape[0])
 
-    dir = wp.vec3(0.0, 0.0, 0.0)
-    if side == 0:
-        ids = blue_ids[ridx]
-        dir[0] = -1.0
-    else:
-        ids = red_ids[ridx]
-        dir[0] = 1.0
+    rng = wp.rand_init(seed + step, env_idx)
+    line_idx = wp.randu(rng, wp.uint32(0), num_sites)
+    t = wp.randf(rng)
 
-    base_pos = geom_xpos[env_idx, ids]
-    pos = base_pos + (dir * 0.05)
+    # y because thats the axis of the rod
+    pos = ball_start_pos[line_idx]
+    pos[1] -= t*ball_start_line_length
+    # go towards the opposite end (blue aims toward the -x)
+    pos[0] += wp.randf(rng) * 0.01 * (-1.0 if is_blue[env_idx] else 1.0)
+
     out_xpos[env_idx, ball_idx + 0] = pos[0]
     out_xpos[env_idx, ball_idx + 1] = pos[1]
     out_xpos[env_idx, ball_idx + 2] = pos[2]
 
-
-    # out_xpos[env_idx, ball_idx + 0] = 0.00
-    # out_xpos[env_idx, ball_idx + 1] = 0.0
-    # out_xpos[env_idx, ball_idx + 2] = 0.5
 
 class FoosballEnv(VecEnv):
     """An environment for foosball training with corrected perspective symmetries."""
@@ -77,6 +69,8 @@ class FoosballEnv(VecEnv):
 
         super().__init__()
 
+        self.step_count = 0
+
         self.num_envs = num_envs
         self.sync_with_viewer = sync_with_viewer
         self.always_blue = always_blue
@@ -84,7 +78,7 @@ class FoosballEnv(VecEnv):
         self.lesson = lesson
 
         self.num_actions = 8
-        self.max_episode_length = int(60 / dt) // 4
+        self.max_episode_length = int(60 / dt) // 6 # 10 seconds
         self.episode_length_buf = torch.zeros(num_envs, dtype=torch.long, device=device)
         self.decimation = 1
         self.action_scale = 30.0
@@ -109,6 +103,20 @@ class FoosballEnv(VecEnv):
         assert self.mjm.body_jntnum[self.ball_id] == 1
         assert self.mjm.body_dofnum[self.ball_id] == 6
 
+        blue_ball_start_sites = [
+            self.mjm.site("blue_1_1_line_start").id,
+            self.mjm.site("blue_1_2_line_start").id,
+            self.mjm.site("blue_2_line_start").id,
+            self.mjm.site("blue_3_line_start").id,
+        ]
+
+        self.ball_line_start = wp.indexedarray(
+            self.model_d.site_pos,
+            indices=[None, wp.array(blue_ball_start_sites, dtype=wp.int32)]
+        ).contiguous()[0, :]
+
+        self.ball_line_length = wp.float32(0.54)
+
         blue_goal_sensor_id = mujoco.mj_name2id(self.mjm, mujoco.mjtObj.mjOBJ_SENSOR, "blue_goal_reached")
         self.blue_goal_sensor_adr = self.mjm.sensor_adr[blue_goal_sensor_id]
 
@@ -118,8 +126,7 @@ class FoosballEnv(VecEnv):
         self.blue_goal_center = torch.tensor(GOAL_CENTER_BLUE, device=self.device).unsqueeze(0)
         self.red_goal_center = torch.tensor(GOAL_CENTER_RED, device=self.device).unsqueeze(0)
 
-        self.side = torch.zeros((self.num_envs), dtype=torch.int8, device=self.device)
-        self.opp_side = 1 - self.side
+        self.is_blue = torch.zeros((self.num_envs), dtype=torch.bool, device=self.device)
 
         self.goal_reward = 300.0
         self.oob_penalty = -300.0
@@ -135,6 +142,9 @@ class FoosballEnv(VecEnv):
         self.blue_geom_ids = wp.array([self.mjm.geom(n).id  for n in blue_geom_names], device=device, dtype=wp.uint16)
         self.red_geom_ids = wp.array([self.mjm.geom(n).id  for n in red_geom_names], device=device, dtype=wp.uint16)
 
+        assert self.blue_geom_ids.shape == self.red_geom_ids.shape
+        assert self.blue_geom_ids.shape[0] == 13
+
         if op_policy is None:
             self.op_policy = NullPolicy(self.num_envs, device=self.device)
         else:
@@ -143,17 +153,17 @@ class FoosballEnv(VecEnv):
         self._reset(None)
 
     def get_observations(self) -> TensorDict:
-        is_red = self.side == 1
+        is_red = ~self.is_blue
         return self._get_obs(is_red)
 
     def _get_obs(self, is_red: torch.Tensor) -> TensorDict:
-        q_pos = wp.to_torch(self.data_d.qvel).clone()
+        q_pos = wp.to_torch(self.data_d.qpos).clone()
         q_vel = wp.to_torch(self.data_d.qvel).clone()
 
         # Relative ball positions and velocities
         ball_pos_rel = torch.tensor(self.data_d.xpos[:, self.ball_id]).clone()
 
-        # relative to your own goal
+
         ball_pos_rel = torch.where(
             is_red.unsqueeze(1),
             ball_pos_rel - self.red_goal_center,
@@ -189,19 +199,20 @@ class FoosballEnv(VecEnv):
 
 
     def step(self, actions: torch.Tensor) -> tuple[TensorDict, torch.Tensor, torch.Tensor, dict]:
+        self.step_count += 1
         # 1. Action Clamping & Scaling
         raw_actions = torch.clamp(actions, min=-1.0, max=1.0)
         scaled_actions = raw_actions * self.action_scale
 
         control = wp.to_torch(self.data_d.ctrl)
 
-        is_red = self.side == 1
+        is_red = ~self.is_blue
         control.zero_()
 
         control[is_red, 8:16] = scaled_actions[is_red]
         control[~is_red, :8] = scaled_actions[~is_red]
 
-        raw_op_actions = torch.clamp(self.op_policy(self._get_obs(self.side == 0)), min=-1.0, max=1.0)
+        raw_op_actions = torch.clamp(self.op_policy(self._get_obs(self.is_blue)), min=-1.0, max=1.0)
         op_actions = raw_op_actions * self.action_scale
         control[is_red, :8] =  op_actions[is_red]
         control[~is_red, 8:16] = op_actions[~is_red]
@@ -222,15 +233,19 @@ class FoosballEnv(VecEnv):
         red_goals = sensor_data[:, self.red_goal_sensor_adr] > 0.5
 
         ball_vel = wp.to_torch(self.data_d.qvel)[:, self.ball_qvel_adr:(self.ball_qvel_adr + 3)]
+        blue_player_pos = self.data_d.xpos[:, self.blue_geom_ids]
+        red_player_pos = self.data_d.xpos[:, self.red_geom_ids]
 
-        rewards = compute_rewards(
+        rewards, r_goal, r_vel, r_dist, r_alignment, r_oob = compute_rewards(
             blue_goals,
             red_goals,
-            self.side,
+            self.is_blue,
             ball_pos,
             ball_vel,
             self.blue_goal_center,
             self.red_goal_center,
+            blue_player_pos,
+            red_player_pos,
             out_of_bounds,
             self.goal_reward,
             self.oob_penalty,
@@ -248,7 +263,17 @@ class FoosballEnv(VecEnv):
         if self.sync_with_viewer:
             self.get_sim_data()
 
-        return obs, rewards, dones, { 'time_outs': time_outs }
+        extras = {
+            'time_outs': time_outs,
+            'log': {
+                'Metrics/goal': r_goal,
+                'Metrics/velocity': r_vel,
+                'Metrics/distance': r_dist,
+                'Metrics/alignment': r_alignment,
+                'Metrics/oob_rate': r_oob,
+            }
+        }
+        return obs, rewards, dones, extras
 
     def _reset(self, dones: torch.Tensor | None = None):
         # update the seed so that we can a new random number each time the kernel is launched
@@ -257,16 +282,16 @@ class FoosballEnv(VecEnv):
 
         if dones is None:
             env_idx = slice(None)
-            self.side[env_idx] = torch.randint(0, 2, size=(self.num_envs,), dtype=torch.int8, device=self.device)
+            self.is_blue[env_idx] = torch.randint(0, 2, size=(self.num_envs,), dtype=torch.int8, device=self.device) == 0
             size = self.num_envs
         else:
             size = int(dones.sum().item())
-            self.side[dones] = torch.randint(0, 2, size=(size,), dtype=torch.int8, device=self.device)
+            self.is_blue[dones] = torch.randint(0, 2, size=(size,), dtype=torch.int8, device=self.device) == 0
             mjw.reset_data(self.model_d, self.data_d, reset=wp.from_torch(dones))
-            env_idx = torch.where(dones)[0]
+            env_idx = torch.where(dones)[0].to(torch.int32)
 
         if self.always_blue:
-            self.side[env_idx] = 0
+            self.is_blue[env_idx] = True
 
         # must propagate changes in the position so the geoms are updated by relative position
         mjw.forward(self.model_d, self.data_d)
@@ -275,8 +300,7 @@ class FoosballEnv(VecEnv):
             # spawn the ball in the line of a kicker pole
             out_ball_positions = self.data_d.qpos
             ball_id = wp.int32(self.ball_qpos_adr)
-            side_wp = wp.from_torch(torch.tensor(self.side, dtype=torch.bool), dtype=wp.bool)
-            geom_size = wp.int32(self.blue_geom_ids.shape[0])
+            side_wp = wp.from_torch(self.is_blue, dtype=wp.bool)
 
             if env_idx == slice(None):
                 env_wp = wp.array([i for i in range(size)], dtype=wp.int32)
@@ -287,12 +311,11 @@ class FoosballEnv(VecEnv):
                 inputs=[
                     env_wp,
                     ball_id,
-                    self.data_d.geom_xpos,
-                    side_wp,
                     self.seed,
-                    geom_size,
-                    self.blue_geom_ids,
-                    self.red_geom_ids,
+                    wp.uint32(self.step_count),
+                    side_wp,
+                    self.ball_line_start,
+                    self.ball_line_length,
                 ],
                 outputs=[
                     out_ball_positions
@@ -338,7 +361,6 @@ class NullPolicy:
     def __init__(self, num_envs, device='cuda:0'):
         self.device =  device
         self.num_envs = num_envs
-
     def __call__(self, obs):
         return torch.zeros((self.num_envs, 8), device=self.device)
 
@@ -347,35 +369,44 @@ class NullPolicy:
 def compute_rewards(
     blue_goals: torch.Tensor,
     red_goals: torch.Tensor,
-    side: torch.Tensor,
+    is_blue: torch.Tensor,
     ball_pos,
     ball_vel,
     blue_goal_center,
     red_goal_center,
+    blue_player_pos, #  n_envs x n_players x 2
+    red_player_pos, # n_envs x n_players x 2
     out_of_bounds,
     goal_reward: float,
     oob_penalty: float,
     num_envs: int,
 ):
-    is_blue = side == 0
 
     ## Goal Rewards
     in_goal = blue_goals | red_goals
     in_right_goal = (is_blue & red_goals) | (~is_blue & blue_goals)
     rewards = torch.zeros(num_envs, device=ball_pos.device) # pyright: ignore
-    rewards[in_goal] = torch.where(in_right_goal[in_goal], 1.5*goal_reward, -goal_reward)
+
+    g_rewards= torch.where(in_right_goal[in_goal], 1.5*goal_reward, -goal_reward)
+    rewards[in_goal] = g_rewards
 
     dist_vec = torch.where(is_blue.unsqueeze(1), ball_pos - red_goal_center, ball_pos - blue_goal_center)
     dist = torch.linalg.vector_norm(dist_vec, dim=1)
-    dist_reward = -dist * 0.5
+    dist_reward = -dist * 2.0
 
-    target_dir = dist_vec / dist.unsqueeze(1).clamp_min(1e-6)
-    target_dir = target_dir[:, :2]
-    vel_reward = torch.linalg.vecdot(ball_vel[:, :2], -target_dir[:, :2], dim=1) * 0.2
+    target_dir = -dist_vec[:, :2]
+    target_dir = target_dir / torch.linalg.vector_norm(target_dir, dim=1).unsqueeze(1).clamp_min(1e-6)
+    vel_reward = torch.linalg.vecdot(ball_vel[:, :2], target_dir, dim=1) * 2.0
+
+    # alignment reward
+    player_pos = torch.where(is_blue, blue_player_pos, red_player_pos)
+    # Get the minimum distance between a player on your side and the ball, this favors alignment
+    alignment_reward = 2.0 * torch.min(torch.linalg.norm(ball_pos[:, :2].unsqeeze(1) - player_pos, dim=2), dim=1).values
 
     # dist reward is negative distance, so closer to the goal the better
-    rewards += vel_reward + dist_reward
+    rewards += vel_reward + dist_reward + alignment_reward
 
     # Out of Bounds Penalty
-    rewards[out_of_bounds] += oob_penalty
-    return rewards
+    oob_rewards = out_of_bounds.float() * oob_penalty
+    rewards[out_of_bounds] += oob_rewards[out_of_bounds]
+    return rewards, g_rewards, vel_reward, dist_reward, alignment_reward, oob_rewards

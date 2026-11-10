@@ -4,7 +4,7 @@ import torch
 import warp as wp
 from rsl_rl.runners import OnPolicyRunner
 
-wp.config.enable_mathdx_solver = False
+wp.config.log_level = wp.LOG_WARNING
 
 import mujoco
 import mujoco_warp as mjw

@@ -2,8 +2,6 @@ import time
 import warp as wp
 import torch
 
-wp.config.enable_mathdx_solver = False
-
 import mujoco
 import mujoco_warp as mjw
 import mujoco.viewer as m_viewer

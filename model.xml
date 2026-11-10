@@ -138,6 +138,51 @@
             <geom name="base_goal2_left_wall" type="box" pos="0.56324 -0.226787 0.297165" size="0.0205989	0.0949165	0.05" />
             <geom name="base_goal2_right_wall" type="box" pos="0.56324 0.226787 0.297165" size="0.0205989	0.0949165	0.05" />
 
+            <site
+                name="blue_1_1_line_start"
+                pos="0.41 0.27 0.28"
+                size="0.005"
+            />
+            <site
+                name="blue_1_1_line_end"
+                pos="0.41 -0.27 0.28"
+                size="0.005"
+            />
+
+            <site
+                name="blue_1_2_line_start"
+                pos="-0.25 0.27 0.28"
+                size="0.005"
+            />
+            <site
+                name="blue_1_2_line_end"
+                pos="-0.25 -0.27 0.28"
+                size="0.005"
+            />
+
+
+            <site
+                name="blue_2_line_start"
+                pos="0.03 0.27 0.28"
+                size="0.005"
+            />
+            <site
+                name="blue_2_line_end"
+                pos="0.03 -0.27 0.28"
+                size="0.005"
+            />
+
+            <site
+                name="blue_3_line_start"
+                pos="0.28 0.27 0.28"
+                size="0.005"
+            />
+            <site
+                name="blue_3_line_end"
+                pos="0.28 -0.27 0.28"
+                size="0.005"
+            />
+
             <!--  Could use replicate to rotate the reds to be a mirror image of the blues, but that will mean they'll have the same material in this model, easier to just copy and rotate-->
             <replicate count="2" offset="-0.656321 0.0 0.0">
                 <body name="blue_1" euler="0.0 0.0 90.0" pos="0.448323 0.198511 0.302471">
