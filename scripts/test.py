@@ -1,3 +1,4 @@
+from mujoco_warp.viewer import key_callback
 import time
 import warp as wp
 import torch
@@ -15,8 +16,11 @@ args_cli = parser.parse_args()
 
 device = 'cuda:0'
 env = FoosballEnv(device=device, sync_with_viewer=True, always_blue=True, bias_to_blue=True)
+env.max_episode_length = 100_000_000
 
 test_data = []
+
+c_rewards = None
 
 def run_env():
 
@@ -26,8 +30,9 @@ def run_env():
         actions = torch.sin(env.episode_length_buf * 0.1).unsqueeze(1).repeat(1, 8).to(device)
 
     assert actions.shape == (env.num_envs, 8)
-    obs, rewards, dones, _ = env.step(actions)
-    print(f"Reward is : {rewards}")
+    obs, rewards, dones, extras = env.step(actions)
+    global c_rewards
+    c_rewards = (rewards, extras)
 
     ball_pos_rel = obs["policy"][0, 32:35]
     test_data.append(torch.cat([ball_pos_rel[0:1], ball_pos_rel[1:2], rewards], dim=-1))
@@ -40,8 +45,15 @@ if args_cli.headless:
             break
 
 else:
-    with m_viewer.launch_passive(env.mjm, env.mjd) as viewer:
+    def on_key_callback(key):
+        if key == ord('P'):
+            print(c_rewards)
+        if key == ord('R'):
+            env.episode_length_buf[:] = env.max_episode_length
+
+    with m_viewer.launch_passive(env.mjm, env.mjd, key_callback=on_key_callback) as viewer:
         while viewer.is_running():
+
             start = time.time()
 
             run_env()

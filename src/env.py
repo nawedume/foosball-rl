@@ -12,40 +12,12 @@ import mujoco
 import mujoco_warp as mjw
 import mujoco.viewer as m_viewer
 
+from kernels.kernels import compute_rewards, set_random_ball_position_to_player
+
 TERMINATION_HEIGHT = 0.15
 
 GOAL_CENTER_BLUE = [0.563284, 0.0, 0.289419]
 GOAL_CENTER_RED = [-0.550284, 0.0, 0.289419]
-
-@wp.kernel
-def set_random_ball_position_to_player(
-    envs: wp.array[wp.int32],
-    ball_idx: wp.int32,
-    seed: wp.int32,
-    step: wp.int32,
-    is_blue: wp.array[wp.bool],
-    ball_start_pos: wp.array[wp.vec3], # size of number of sites
-    ball_start_line_length: wp.float32,
-    out_xpos: wp.array2d[wp.float32],
-):
-    env_idx = envs[wp.tid()]
-
-    num_sites = wp.uint32(ball_start_pos.shape[0])
-
-    rng = wp.rand_init(seed + step, env_idx)
-    line_idx = wp.randu(rng, wp.uint32(0), num_sites)
-    t = wp.randf(rng)
-
-    # y because thats the axis of the rod
-    pos = ball_start_pos[line_idx]
-    pos[1] -= t*ball_start_line_length
-    # go towards the opposite end (blue aims toward the -x)
-    pos[0] += wp.randf(rng) * 0.01 * (-1.0 if is_blue[env_idx] else 1.0)
-
-    out_xpos[env_idx, ball_idx + 0] = pos[0]
-    out_xpos[env_idx, ball_idx + 1] = pos[1]
-    out_xpos[env_idx, ball_idx + 2] = pos[2]
-
 
 class FoosballEnv(VecEnv):
     """An environment for foosball training with corrected perspective symmetries."""
@@ -98,7 +70,7 @@ class FoosballEnv(VecEnv):
         self.data_d = mjw.make_data(self.mjm, nworld=num_envs)
 
         self.ball_id = mujoco.mj_name2id(self.mjm, mujoco.mjtObj.mjOBJ_BODY, "ball")
-        self.ball_qpos_adr = self.mjm.body_jntadr[self.ball_id]
+        self.ball_qpos_adr = self.mjm.jnt_qposadr[self.mjm.body_jntadr[self.ball_id]]
         self.ball_qvel_adr = self.mjm.body_dofadr[self.ball_id]
         assert self.mjm.body_jntnum[self.ball_id] == 1
         assert self.mjm.body_dofnum[self.ball_id] == 6
@@ -128,7 +100,7 @@ class FoosballEnv(VecEnv):
 
         self.is_blue = torch.zeros((self.num_envs), dtype=torch.bool, device=self.device)
 
-        self.goal_reward = 300.0
+        self.goal_reward = 3000.0
         self.oob_penalty = -300.0
 
         # get the blue and red players for resetting purposes (only matters for some cirriculums)
@@ -139,16 +111,38 @@ class FoosballEnv(VecEnv):
         red_geom_names = [
             "r1abottom0","r1bbottom0","r1cbottom0","r1abottom1","r1bbottom1","r1cbottom1","r2abottom","r2bbottom","r3abottom","r3bbottom","r3cbottom","r3dbottom","r3ebottom",
         ]
-        self.blue_geom_ids = wp.array([self.mjm.geom(n).id  for n in blue_geom_names], device=device, dtype=wp.uint16)
-        self.red_geom_ids = wp.array([self.mjm.geom(n).id  for n in red_geom_names], device=device, dtype=wp.uint16)
-
+        self.blue_geom_ids = wp.array([self.mjm.geom(n).id  for n in blue_geom_names], device=device, dtype=wp.int32)
+        self.red_geom_ids = wp.array([self.mjm.geom(n).id  for n in red_geom_names], device=device, dtype=wp.int32)
         assert self.blue_geom_ids.shape == self.red_geom_ids.shape
         assert self.blue_geom_ids.shape[0] == 13
+
+        blue_rod_geom_names = [
+            "blue_rod_10",
+            "blue_rod_11",
+            "blue_rod_2",
+            "blue_rod_3",
+        ]
+        red_rod_geom_names = [
+            "red_rod_10",
+            "red_rod_11",
+            "red_rod_2",
+            "red_rod_3",
+        ]
+        blue_rod_gids = wp.array([self.mjm.geom(n).id for n in blue_rod_geom_names], device=device, dtype=wp.int32)
+        red_rod_gids = wp.array([self.mjm.geom(n).id for n in red_rod_geom_names], device=device, dtype=wp.int32)
+        assert blue_rod_gids.shape == red_rod_gids.shape
+        assert blue_rod_gids.shape[0] == 4
+
+        print(self.model_d.geom_pos.shape)
+        self.blue_rod_pos = self.data_d.geom_xpos[0][blue_rod_gids].contiguous()
+        self.red_rod_pos =  self.data_d.geom_xpos[0][red_rod_gids].contiguous()
 
         if op_policy is None:
             self.op_policy = NullPolicy(self.num_envs, device=self.device)
         else:
             self.op_policy = op_policy
+
+        self.rewards = wp.zeros((self.num_envs, 6), device=self.device)
 
         self._reset(None)
 
@@ -191,7 +185,7 @@ class FoosballEnv(VecEnv):
         player_rod_state = torch.where(is_red.unsqueeze(1), red_state, blue_state)
         op_rod_state = torch.where(is_red.unsqueeze(1), blue_state, red_state)
 
-        data = torch.cat([player_rod_state, op_rod_state, ball_pos_rel, ball_vel_rel, is_red.to(torch.float).unsqueeze(1)], dim=1)
+        data = torch.cat([player_rod_state, op_rod_state, ball_pos_rel, ball_vel_rel], dim=1)
 
         ret = {"policy": data}
         td = TensorDict(ret, batch_size=[self.num_envs], device=self.device) # ty: ignore
@@ -233,24 +227,33 @@ class FoosballEnv(VecEnv):
         red_goals = sensor_data[:, self.red_goal_sensor_adr] > 0.5
 
         ball_vel = wp.to_torch(self.data_d.qvel)[:, self.ball_qvel_adr:(self.ball_qvel_adr + 3)]
-        blue_player_pos = self.data_d.xpos[:, self.blue_geom_ids]
-        red_player_pos = self.data_d.xpos[:, self.red_geom_ids]
+        blue_player_pos = wp.to_torch(self.data_d.geom_xpos[:, self.blue_geom_ids].contiguous())
+        red_player_pos = wp.to_torch(self.data_d.geom_xpos[:, self.red_geom_ids].contiguous())
 
-        rewards, r_goal, r_vel, r_dist, r_alignment, r_oob = compute_rewards(
-            blue_goals,
-            red_goals,
-            self.is_blue,
-            ball_pos,
-            ball_vel,
-            self.blue_goal_center,
-            self.red_goal_center,
-            blue_player_pos,
-            red_player_pos,
-            out_of_bounds,
-            self.goal_reward,
-            self.oob_penalty,
-            self.num_envs,
+
+        wp.launch(compute_rewards, dim=(self.num_envs, ),
+            inputs=[
+                self.is_blue,
+                blue_goals,
+                red_goals,
+                ball_pos,
+                ball_vel,
+                self.blue_goal_center,
+                self.red_goal_center,
+                out_of_bounds,
+
+                self.blue_rod_pos,
+                self.red_rod_pos,
+                blue_player_pos,
+                red_player_pos,
+
+                self.goal_reward,
+                self.oob_penalty,
+
+            ],
+            outputs=[self.rewards]
         )
+        rewards_t = wp.to_torch(self.rewards).clone()
 
         time_outs = (self.episode_length_buf > self.max_episode_length).bool()
         dones =  time_outs | out_of_bounds | blue_goals | red_goals
@@ -266,14 +269,14 @@ class FoosballEnv(VecEnv):
         extras = {
             'time_outs': time_outs,
             'log': {
-                'Metrics/goal': r_goal,
-                'Metrics/velocity': r_vel,
-                'Metrics/distance': r_dist,
-                'Metrics/alignment': r_alignment,
-                'Metrics/oob_rate': r_oob,
+                'Metrics/goal': rewards_t[:, 1],
+                'Metrics/oob_rate': rewards_t[:, 2],
+                'Metrics/distance': rewards_t[:, 3],
+                'Metrics/velocity': rewards_t[:, 4],
+                'Metrics/alignment': rewards_t[:, 5],
             }
         }
-        return obs, rewards, dones, extras
+        return obs, rewards_t[:, 0], dones, extras
 
     def _reset(self, dones: torch.Tensor | None = None):
         # update the seed so that we can a new random number each time the kernel is launched
@@ -323,6 +326,7 @@ class FoosballEnv(VecEnv):
             )
 
         elif self.lesson == "final":
+            qpos = wp.to_torch(self.data_d.qpos)
             qvel = wp.to_torch(self.data_d.qvel)
             ball_vel = qvel[:, 16:19]
 
@@ -364,49 +368,3 @@ class NullPolicy:
     def __call__(self, obs):
         return torch.zeros((self.num_envs, 8), device=self.device)
 
-
-@torch.compile
-def compute_rewards(
-    blue_goals: torch.Tensor,
-    red_goals: torch.Tensor,
-    is_blue: torch.Tensor,
-    ball_pos,
-    ball_vel,
-    blue_goal_center,
-    red_goal_center,
-    blue_player_pos, #  n_envs x n_players x 2
-    red_player_pos, # n_envs x n_players x 2
-    out_of_bounds,
-    goal_reward: float,
-    oob_penalty: float,
-    num_envs: int,
-):
-
-    ## Goal Rewards
-    in_goal = blue_goals | red_goals
-    in_right_goal = (is_blue & red_goals) | (~is_blue & blue_goals)
-    rewards = torch.zeros(num_envs, device=ball_pos.device) # pyright: ignore
-
-    g_rewards= torch.where(in_right_goal[in_goal], 1.5*goal_reward, -goal_reward)
-    rewards[in_goal] = g_rewards
-
-    dist_vec = torch.where(is_blue.unsqueeze(1), ball_pos - red_goal_center, ball_pos - blue_goal_center)
-    dist = torch.linalg.vector_norm(dist_vec, dim=1)
-    dist_reward = -dist * 2.0
-
-    target_dir = -dist_vec[:, :2]
-    target_dir = target_dir / torch.linalg.vector_norm(target_dir, dim=1).unsqueeze(1).clamp_min(1e-6)
-    vel_reward = torch.linalg.vecdot(ball_vel[:, :2], target_dir, dim=1) * 2.0
-
-    # alignment reward
-    player_pos = torch.where(is_blue, blue_player_pos, red_player_pos)
-    # Get the minimum distance between a player on your side and the ball, this favors alignment
-    alignment_reward = 2.0 * torch.min(torch.linalg.norm(ball_pos[:, :2].unsqeeze(1) - player_pos, dim=2), dim=1).values
-
-    # dist reward is negative distance, so closer to the goal the better
-    rewards += vel_reward + dist_reward + alignment_reward
-
-    # Out of Bounds Penalty
-    oob_rewards = out_of_bounds.float() * oob_penalty
-    rewards[out_of_bounds] += oob_rewards[out_of_bounds]
-    return rewards, g_rewards, vel_reward, dist_reward, alignment_reward, oob_rewards

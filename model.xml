@@ -187,7 +187,7 @@
             <replicate count="2" offset="-0.656321 0.0 0.0">
                 <body name="blue_1" euler="0.0 0.0 90.0" pos="0.448323 0.198511 0.302471">
                     <geom name="blue_1_vis" type="mesh" class="visual" mesh="blue_1" material="navy_blue" />
-                    <geom class="rod" />
+                    <geom class="rod" name="blue_rod_1" />
 
                     <body pos="0.076053 0.0 -0.021674">
                         <attach model="player" body="player" prefix="b1a" />
@@ -207,7 +207,7 @@
 
             <body name="blue_2" euler="0.0 0.0 90.0" pos="0.319917 0.245792 0.302471">
                 <geom name="blue_2_vis" type="mesh" class="visual" mesh="blue_2" material="navy_blue" />
-                <geom class="rod" />
+                <geom class="rod" name="blue_rod_2" />
 
                 <body pos="0.032212 0.0 -0.021674">
                     <attach model="player" body="player" prefix="b2a" />
@@ -222,7 +222,7 @@
 
             <body name="blue_3" euler="0.0 0.0 90.0" pos="0.067426 0.110197 0.302471">
                 <geom name="blue_3_vis" type="mesh" class="visual" mesh="blue_3" material="navy_blue" />
-                <geom class="rod" />
+                <geom class="rod" name="blue_rod_3" />
 
                 <body pos="0.165844 0.0 -0.021674">
                     <attach model="player" body="player" prefix="b3a" />
@@ -249,7 +249,7 @@
                 <replicate count="2" offset="-0.656321 0.0 0.0">
                     <body name="red_1" euler="0.0 0.0 90.0" pos="0.448323 0.198511 0.302471">
                         <geom name="red_1_vis" type="mesh" class="visual" mesh="blue_1" material="cherry_red" />
-                        <geom class="rod" />
+                        <geom class="rod" name="red_rod_1" />
 
                         <body pos="0.076053 0.0 -0.021674">
                             <attach model="player" body="player" prefix="r1a" />
@@ -268,7 +268,7 @@
 
                 <body name="red_2" euler="0.0 0.0 90.0" pos="0.319917 0.245792 0.302471">
                     <geom name="red_2_vis" type="mesh" class="visual" mesh="blue_2" material="cherry_red" />
-                    <geom class="rod" />
+                    <geom class="rod" name="red_rod_2" />
 
                     <body pos="0.032212 0.0 -0.021674">
                         <attach model="player" body="player" prefix="r2a" />
@@ -283,7 +283,7 @@
 
                 <body name="red_3" euler="0.0 0.0 90.0" pos="0.067426 0.110197 0.302471">
                     <geom name="red_3_vis" type="mesh" class="visual" mesh="blue_3" material="cherry_red" />
-                    <geom class="rod" />
+                    <geom class="rod" name="red_rod_3" />
 
                     <body pos="0.165844 0.0 -0.021674">
                         <attach model="player" body="player" prefix="r3a" />

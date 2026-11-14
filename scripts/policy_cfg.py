@@ -1,6 +1,6 @@
 train_cfg = {
     "obs_groups": {},
-    "num_steps_per_env": 64,
+    "num_steps_per_env": 128,
     "save_interval": 25,
     "algorithm": {
         "class_name": "PPO",
@@ -12,6 +12,7 @@ train_cfg = {
         "num_mini_batches": 8,
         "learning_rate": 3e-4,
         "max_grad_norm": 1.0,
+        "gamma": 0.995,
     },
     "actor": {
         "class_name": "MLPModel",
