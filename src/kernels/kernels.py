@@ -1,5 +1,199 @@
 import warp as wp
 
+@wp.func
+def scale_action(value: float, scale: float):
+    # Comparisons preserve NaNs, matching torch.clamp's diagnostic behavior.
+    if value < -1.0:
+        value = -1.0
+    elif value > 1.0:
+        value = 1.0
+    return value * scale
+
+@wp.kernel
+def assign_controls(
+    actions: wp.array2d[wp.float32],
+    opponent_actions: wp.array2d[wp.float32],
+    is_blue: wp.array[wp.bool],
+    action_scale: float,
+    opponent_scale: float,
+    null_opponent: bool,
+    actions_scaled: bool,
+    opponent_scaled: bool,
+    controls: wp.array2d[wp.float32],
+):
+    env, column = wp.tid()
+    rod = column % 8
+    player = (column < 8) == is_blue[env]
+    value = float(0.0)
+    if player:
+        value = actions[env, rod]
+        if not actions_scaled:
+            value = scale_action(value, action_scale)
+    elif not null_opponent:
+        value = opponent_actions[env, rod]
+        if not opponent_scaled:
+            value = scale_action(value, opponent_scale)
+    controls[env, column] = value
+
+
+@wp.kernel
+def gather_step_state(
+    xpos: wp.array2d[wp.vec3],
+    geom_xpos: wp.array2d[wp.vec3],
+    qvel: wp.array2d[wp.float32],
+    sensors: wp.array2d[wp.float32],
+    blue_geom_ids: wp.array[wp.int32],
+    red_geom_ids: wp.array[wp.int32],
+    ball_id: int,
+    ball_velocity_address: int,
+    blue_sensor: int,
+    red_sensor: int,
+    max_episode_length: int,
+    termination_height: float,
+    episode_length: wp.array[wp.int64],
+    ball_pos: wp.array[wp.vec3],
+    ball_vel: wp.array[wp.vec3],
+    blue_players: wp.array2d[wp.vec3],
+    red_players: wp.array2d[wp.vec3],
+    blue_goals: wp.array[wp.bool],
+    red_goals: wp.array[wp.bool],
+    out_of_bounds: wp.array[wp.bool],
+    time_outs: wp.array[wp.bool],
+    dones: wp.array[wp.bool],
+):
+    env = wp.tid()
+    position = xpos[env, ball_id]
+    ball_pos[env] = position
+    ball_vel[env] = wp.vec3(
+        qvel[env, ball_velocity_address],
+        qvel[env, ball_velocity_address + 1],
+        qvel[env, ball_velocity_address + 2],
+    )
+    for player in range(blue_geom_ids.shape[0]):
+        blue_players[env, player] = geom_xpos[env, blue_geom_ids[player]]
+        red_players[env, player] = geom_xpos[env, red_geom_ids[player]]
+    episode_length[env] += wp.int64(1)
+    timeout = episode_length[env] > wp.int64(max_episode_length)
+    blue = sensors[env, blue_sensor] > 0.5
+    red = sensors[env, red_sensor] > 0.5
+    outside = position[2] <= termination_height
+    blue_goals[env] = blue
+    red_goals[env] = red
+    out_of_bounds[env] = outside
+    time_outs[env] = timeout
+    dones[env] = timeout or blue or red or outside
+
+
+@wp.kernel
+def advance_reset_seed(dones: wp.array[wp.bool], seed: wp.array[wp.int32]):
+    # A device-side decision keeps the seed unchanged for an empty reset mask.
+    for env in range(dones.shape[0]):
+        if dones[env]:
+            seed[0] += 1
+            break
+
+
+@wp.kernel
+def invert_sides(is_blue: wp.array[wp.bool], is_red: wp.array[wp.bool]):
+    env = wp.tid()
+    is_red[env] = not is_blue[env]
+
+@wp.kernel
+def prepare_resets(
+    dones: wp.array[wp.bool],
+    seed: wp.array[wp.int32],
+    always_blue: bool,
+    is_blue: wp.array[wp.bool],
+    episode_length: wp.array[wp.int64],
+):
+    env = wp.tid()
+    if dones[env]:
+        rng = wp.rand_init(seed[0], env)
+        is_blue[env] = always_blue or wp.randf(rng) < 0.5
+        episode_length[env] = wp.int64(0)
+
+
+@wp.kernel
+def randomize_resets(
+    dones: wp.array[wp.bool],
+    seed: wp.array[wp.int32],
+    is_blue: wp.array[wp.bool],
+    kick_lesson: bool,
+    bias_to_blue: bool,
+    ball_position_address: int,
+    ball_velocity_address: int,
+    ball_start_pos: wp.array[wp.vec3],
+    ball_line_length: float,
+    joint_ranges: wp.array2d[wp.vec2],
+    qpos: wp.array2d[wp.float32],
+    qvel: wp.array2d[wp.float32],
+):
+    env = wp.tid()
+    if dones[env]:
+        # Independent per-world streams avoid compacting the reset mask on the CPU.
+        rng = wp.rand_init(seed[0] + 104729, env)
+        if kick_lesson:
+            line = wp.randu(rng, wp.uint32(0), wp.uint32(ball_start_pos.shape[0]))
+            position = ball_start_pos[line]
+            position[1] -= wp.randf(rng) * ball_line_length
+            direction = float(1.0)
+            if is_blue[env]:
+                direction = -1.0
+            position[0] += wp.randf(rng) * 0.01 * direction
+            for component in range(3):
+                qpos[env, ball_position_address + component] = position[component]
+        else:
+            bias = float(0.0)
+            if bias_to_blue:
+                bias = 1.0
+            qvel[env, ball_velocity_address] = wp.randf(rng) + bias
+            qvel[env, ball_velocity_address + 1] = -wp.randf(rng) * 2.0
+            qpos[env, ball_position_address] += (wp.randf(rng) - 0.5) * 0.8
+            qpos[env, ball_position_address + 1] += (wp.randf(rng) - 0.5) * 0.6
+        for joint in range(16):
+            minimum = joint_ranges[0, joint][0]
+            maximum = joint_ranges[0, joint][1]
+            qpos[env, joint] = minimum + wp.randf(rng) * (maximum - minimum)
+
+@wp.kernel
+def compute_observations(
+    qpos: wp.array2d[wp.float32],
+    qvel: wp.array2d[wp.float32],
+    xpos: wp.array2d[wp.vec3],
+    is_red: wp.array[wp.bool],
+    blue_goal: wp.array2d[wp.float32],
+    red_goal: wp.array2d[wp.float32],
+    ball_id: int,
+    ball_velocity_address: int,
+    observations: wp.array2d[wp.float32],
+):
+    env, column = wp.tid()
+    red = is_red[env]
+    if column < 32:
+        # Four groups: player positions/velocities, opponent positions/velocities.
+        group = column // 8
+        rod = column % 8
+        offset = 0
+        if (group < 2 and red) or (group >= 2 and not red):
+            offset = 8
+        if group % 2 == 0:
+            observations[env, column] = qpos[env, offset + rod]
+        else:
+            observations[env, column] = qvel[env, offset + rod]
+    else:
+        component = (column - 32) % 3
+        value = float(0.0)
+        if column < 35:
+            goal = blue_goal[0, component]
+            if red:
+                goal = red_goal[0, component]
+            value = xpos[env, ball_id][component] - goal
+        else:
+            value = qvel[env, ball_velocity_address + component]
+        if red and component < 2:
+            value = -value
+        observations[env, column] = value
+
 @wp.kernel
 def set_random_ball_position_to_player(
     envs: wp.array[wp.int32],

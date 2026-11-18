@@ -1,3 +1,4 @@
+from contextlib import nullcontext
 from ctypes import alignment
 from numpy.core.multiarray import dtype
 from rsl_rl.env import VecEnv
@@ -12,7 +13,16 @@ import mujoco
 import mujoco_warp as mjw
 import mujoco.viewer as m_viewer
 
-from kernels.kernels import compute_rewards, set_random_ball_position_to_player
+from kernels.kernels import (
+    advance_reset_seed,
+    assign_controls,
+    compute_observations,
+    compute_rewards,
+    gather_step_state,
+    invert_sides,
+    prepare_resets,
+    randomize_resets,
+)
 
 TERMINATION_HEIGHT = 0.15
 
@@ -34,6 +44,7 @@ class FoosballEnv(VecEnv):
         bias_to_blue=False,
         lesson: str = "kick",
         seed: int = 42,
+        use_cuda_graph: bool = True,
     ) -> None:
         np.random.seed(seed)
         torch.manual_seed(seed)
@@ -52,10 +63,17 @@ class FoosballEnv(VecEnv):
         self.num_actions = 8
         self.max_episode_length = int(60 / dt) // 6 # 10 seconds
         self.episode_length_buf = torch.zeros(num_envs, dtype=torch.long, device=device)
+        self.reset_seed = torch.tensor([seed], dtype=torch.int32, device=device)
+        self._all_reset = torch.ones(num_envs, dtype=torch.bool, device=device)
         self.decimation = 1
         self.action_scale = 30.0
 
         self.device = device
+        self.use_cuda_graph = use_cuda_graph and str(device).startswith("cuda")
+        self.step_graph = None
+        self._step_signature = None
+        self._building_step_graph = False
+        self.forward_graph = None
         self.cfg = {}
 
         wp.set_device(device)
@@ -97,6 +115,8 @@ class FoosballEnv(VecEnv):
 
         self.blue_goal_center = torch.tensor(GOAL_CENTER_BLUE, device=self.device).unsqueeze(0)
         self.red_goal_center = torch.tensor(GOAL_CENTER_RED, device=self.device).unsqueeze(0)
+        self.blue_goal_wp = wp.vec3(*GOAL_CENTER_BLUE)
+        self.red_goal_wp = wp.vec3(*GOAL_CENTER_RED)
 
         self.is_blue = torch.zeros((self.num_envs), dtype=torch.bool, device=self.device)
 
@@ -146,215 +166,303 @@ class FoosballEnv(VecEnv):
 
         self._reset(None)
 
+        if self.use_cuda_graph:
+            with wp.ScopedCapture(device=self.device) as capture:
+                mjw.forward(self.model_d, self.data_d)
+            self.forward_graph = capture.graph
+
+        # Stable inputs and outputs for replay of the complete environment step.
+        self._actions = torch.empty((num_envs, 8), dtype=torch.float32, device=device)
+        self._opponent_actions = torch.empty_like(self._actions)
+        self._step_observations = wp.empty((num_envs, 38), device=device)
+        self._step_ball_pos = wp.empty(num_envs, dtype=wp.vec3, device=device)
+        self._step_ball_vel = wp.empty(num_envs, dtype=wp.vec3, device=device)
+        self._step_blue_players = wp.empty((num_envs, 13), dtype=wp.vec3, device=device)
+        self._step_red_players = wp.empty((num_envs, 13), dtype=wp.vec3, device=device)
+        self._step_blue_goals = wp.empty(num_envs, dtype=wp.bool, device=device)
+        self._step_red_goals = wp.empty(num_envs, dtype=wp.bool, device=device)
+        self._step_oob = wp.empty(num_envs, dtype=wp.bool, device=device)
+        self._step_time_outs = wp.empty(num_envs, dtype=wp.bool, device=device)
+        self._step_dones = wp.empty(num_envs, dtype=wp.bool, device=device)
+        self._step_is_red = wp.empty(num_envs, dtype=wp.bool, device=device)
+        self._step_torch_stream = torch.cuda.Stream(device=device) if str(device).startswith("cuda") else None
+        self._step_stream = wp.stream_from_torch(self._step_torch_stream) if self._step_torch_stream is not None else None
+        if self._step_stream is not None:
+            # Initialization runs on Warp's default stream before the step stream exists.
+            wp.synchronize_device(device)
+
     def get_observations(self) -> TensorDict:
         is_red = ~self.is_blue
         return self._get_obs(is_red)
 
     def _get_obs(self, is_red: torch.Tensor) -> TensorDict:
-        q_pos = wp.to_torch(self.data_d.qpos).clone()
-        q_vel = wp.to_torch(self.data_d.qvel).clone()
-
-        # Relative ball positions and velocities
-        ball_pos_rel = torch.tensor(self.data_d.xpos[:, self.ball_id]).clone()
-
-
-        ball_pos_rel = torch.where(
-            is_red.unsqueeze(1),
-            ball_pos_rel - self.red_goal_center,
-            ball_pos_rel - self.blue_goal_center
+        # A fresh fixed-size output preserves observations retained by callers.
+        observations = torch.empty((self.num_envs, 38), dtype=torch.float32, device=self.device)
+        wp.launch(
+            compute_observations,
+            dim=(self.num_envs, 38),
+            inputs=[
+                self.data_d.qpos,
+                self.data_d.qvel,
+                self.data_d.xpos,
+                wp.from_torch(is_red),
+                wp.from_torch(self.blue_goal_center),
+                wp.from_torch(self.red_goal_center),
+                self.ball_id,
+                int(self.ball_qvel_adr),
+            ],
+            outputs=[wp.from_torch(observations)],
+        )
+        return TensorDict(
+            {"policy": observations},
+            batch_size=[self.num_envs],
+            device=self.device,
         )
 
-        # Mirror BOTH X and Y axes for Red so left/right and forward/backward match perspective
-        ball_pos_rel[is_red, 0] = -ball_pos_rel[is_red, 0]
-        ball_pos_rel[is_red, 1] = -ball_pos_rel[is_red, 1]
 
-        ball_vel_rel = q_vel[:, self.ball_qvel_adr:(self.ball_qvel_adr + 3)]
-        ball_vel_rel[is_red, 0] = -ball_vel_rel[is_red, 0]
-        ball_vel_rel[is_red, 1] = -ball_vel_rel[is_red, 1]
-
-        # Assuming that the rods are the first 16 entires, this should be true based on the moedl
-        # Rod states
-        blue_pos = q_pos[:, :8]
-        blue_vel = q_vel[:, :8]
-        blue_state = torch.cat([blue_pos, blue_vel], dim=-1)
-
-        red_pos = q_pos[:, 8:16]
-        red_vel = q_vel[:, 8:16]
-        red_state = torch.cat([red_pos, red_vel], dim=-1)
-
-        player_rod_state = torch.where(is_red.unsqueeze(1), red_state, blue_state)
-        op_rod_state = torch.where(is_red.unsqueeze(1), blue_state, red_state)
-
-        data = torch.cat([player_rod_state, op_rod_state, ball_pos_rel, ball_vel_rel], dim=1)
-
-        ret = {"policy": data}
-        td = TensorDict(ret, batch_size=[self.num_envs], device=self.device) # ty: ignore
-        return td
-
-
-    def step(self, actions: torch.Tensor) -> tuple[TensorDict, torch.Tensor, torch.Tensor, dict]:
+    def step(
+        self, actions: torch.Tensor
+    ) -> tuple[TensorDict, torch.Tensor, torch.Tensor, dict]:
         self.step_count += 1
-        # 1. Action Clamping & Scaling
-        raw_actions = torch.clamp(actions, min=-1.0, max=1.0)
-        scaled_actions = raw_actions * self.action_scale
-
-        control = wp.to_torch(self.data_d.ctrl)
-
-        is_red = ~self.is_blue
-        control.zero_()
-
-        control[is_red, 8:16] = scaled_actions[is_red]
-        control[~is_red, :8] = scaled_actions[~is_red]
-
-        raw_op_actions = torch.clamp(self.op_policy(self._get_obs(self.is_blue)), min=-1.0, max=1.0)
-        op_actions = raw_op_actions * self.action_scale
-        control[is_red, :8] =  op_actions[is_red]
-        control[~is_red, 8:16] = op_actions[~is_red]
-
-        for _ in range(self.decimation):
-            mjw.step(self.model_d, self.data_d)
-
-        mjw.forward(self.model_d, self.data_d)
-
-        self.episode_length_buf += 1
-
-        # Environment State & Resets
-        ball_pos = wp.to_torch(self.data_d.xpos)[:, self.ball_id]
-        out_of_bounds = ball_pos[:, 2] <= TERMINATION_HEIGHT
-
-        sensor_data = wp.to_torch(self.data_d.sensordata)
-        blue_goals = sensor_data[:, self.blue_goal_sensor_adr] > 0.5
-        red_goals = sensor_data[:, self.red_goal_sensor_adr] > 0.5
-
-        ball_vel = wp.to_torch(self.data_d.qvel)[:, self.ball_qvel_adr:(self.ball_qvel_adr + 3)]
-        blue_player_pos = wp.to_torch(self.data_d.geom_xpos[:, self.blue_geom_ids].contiguous())
-        red_player_pos = wp.to_torch(self.data_d.geom_xpos[:, self.red_geom_ids].contiguous())
-
-
-        wp.launch(compute_rewards, dim=(self.num_envs, ),
-            inputs=[
-                self.is_blue,
-                blue_goals,
-                red_goals,
-                ball_pos,
-                ball_vel,
-                self.blue_goal_center,
-                self.red_goal_center,
-                out_of_bounds,
-
-                self.blue_rod_pos,
-                self.red_rod_pos,
-                blue_player_pos,
-                red_player_pos,
-
+        if actions.shape != (self.num_envs, 8):
+            raise ValueError(
+                f"Expected actions shaped {(self.num_envs, 8)}, got {tuple(actions.shape)}"
+            )
+        null_opponent = type(self.op_policy) is NullPolicy
+        actions_scaled = actions.dtype != torch.float32
+        opponent_scaled = False
+        caller_stream = None
+        if self._step_torch_stream is not None:
+            caller_stream = torch.cuda.current_stream(self.device)
+            self._step_torch_stream.wait_stream(caller_stream)
+        torch_scope = (
+            torch.cuda.stream(self._step_torch_stream)
+            if caller_stream is not None
+            else nullcontext()
+        )
+        warp_scope = (
+            wp.ScopedStream(self._step_stream)
+            if caller_stream is not None
+            else nullcontext()
+        )
+        with torch_scope, warp_scope:
+            player_input = (
+                torch.clamp(actions, -1.0, 1.0) * self.action_scale
+                if actions_scaled
+                else actions
+            )
+            self._actions.copy_(player_input)
+            if caller_stream is not None and actions.is_cuda:
+                actions.record_stream(self._step_torch_stream)
+            if not null_opponent:
+                opponent = self.op_policy(self._get_obs(self.is_blue))
+                if opponent.shape != (self.num_envs, 8):
+                    raise ValueError("Opponent actions must have shape (num_envs, 8)")
+                opponent_scaled = opponent.dtype != torch.float32
+                opponent_input = (
+                    torch.clamp(opponent, -1.0, 1.0) * self.action_scale
+                    if opponent_scaled
+                    else opponent
+                )
+                self._opponent_actions.copy_(opponent_input)
+            signature = (
+                self.decimation,
+                self.action_scale,
+                self.max_episode_length,
+                self.lesson,
+                self.always_blue,
+                self.bias_to_blue,
                 self.goal_reward,
                 self.oob_penalty,
+                float(self.ball_line_length),
+                null_opponent,
+                actions_scaled,
+                opponent_scaled,
+                self.episode_length_buf.data_ptr(),
+                self.is_blue.data_ptr(),
+                self.reset_seed.data_ptr(),
+            )
+            if self.use_cuda_graph:
+                if self.step_graph is None or self._step_signature != signature:
+                    self._building_step_graph = True
+                    try:
+                        with wp.ScopedCapture(stream=self._step_stream) as capture:
+                            self._simulate_step(
+                                null_opponent, actions_scaled, opponent_scaled
+                            )
+                    finally:
+                        self._building_step_graph = False
+                    self.step_graph = capture.graph
+                    self._step_signature = signature
+                wp.capture_launch(self.step_graph, stream=self._step_stream)
+            else:
+                self._simulate_step(null_opponent, actions_scaled, opponent_scaled)
+        if caller_stream is not None:
+            caller_stream.wait_stream(self._step_torch_stream)
 
-            ],
-            outputs=[self.rewards]
-        )
+        # Retain independent outputs for rollout storage and external callers.
         rewards_t = wp.to_torch(self.rewards).clone()
-
-        time_outs = (self.episode_length_buf > self.max_episode_length).bool()
-        dones =  time_outs | out_of_bounds | blue_goals | red_goals
-        self.episode_length_buf[dones] = 0
-        if dones.any():
-            self._reset(dones)
-
-        obs = self.get_observations()
+        time_outs = wp.to_torch(self._step_time_outs).clone()
+        dones = wp.to_torch(self._step_dones).clone()
+        observations = wp.to_torch(self._step_observations).clone()
+        obs = TensorDict(
+            {"policy": observations}, batch_size=[self.num_envs], device=self.device
+        )
 
         if self.sync_with_viewer:
             self.get_sim_data()
 
         extras = {
-            'time_outs': time_outs,
-            'log': {
-                'Metrics/goal': rewards_t[:, 1],
-                'Metrics/oob_rate': rewards_t[:, 2],
-                'Metrics/distance': rewards_t[:, 3],
-                'Metrics/velocity': rewards_t[:, 4],
-                'Metrics/alignment': rewards_t[:, 5],
-            }
+            "time_outs": time_outs,
+            "log": {
+                "Metrics/goal": rewards_t[:, 1],
+                "Metrics/oob_rate": rewards_t[:, 2],
+                "Metrics/distance": rewards_t[:, 3],
+                "Metrics/velocity": rewards_t[:, 4],
+                "Metrics/alignment": rewards_t[:, 5],
+            },
         }
         return obs, rewards_t[:, 0], dones, extras
 
+    def _simulate_step(self, null_opponent, actions_scaled, opponent_scaled):
+        wp.launch(
+            assign_controls,
+            dim=(self.num_envs, 16),
+            inputs=[
+                wp.from_torch(self._actions),
+                wp.from_torch(self._opponent_actions),
+                wp.from_torch(self.is_blue),
+                self.action_scale,
+                self.action_scale,
+                null_opponent,
+                actions_scaled,
+                opponent_scaled,
+            ],
+            outputs=[self.data_d.ctrl],
+        )
+        for _ in range(self.decimation):
+            mjw.step(self.model_d, self.data_d)
+        mjw.forward(self.model_d, self.data_d)
+        wp.launch(
+            gather_step_state,
+            dim=self.num_envs,
+            inputs=[
+                self.data_d.xpos,
+                self.data_d.geom_xpos,
+                self.data_d.qvel,
+                self.data_d.sensordata,
+                self.blue_geom_ids,
+                self.red_geom_ids,
+                self.ball_id,
+                int(self.ball_qvel_adr),
+                int(self.blue_goal_sensor_adr),
+                int(self.red_goal_sensor_adr),
+                self.max_episode_length,
+                TERMINATION_HEIGHT,
+            ],
+            outputs=[
+                wp.from_torch(self.episode_length_buf),
+                self._step_ball_pos,
+                self._step_ball_vel,
+                self._step_blue_players,
+                self._step_red_players,
+                self._step_blue_goals,
+                self._step_red_goals,
+                self._step_oob,
+                self._step_time_outs,
+                self._step_dones,
+            ],
+        )
+        wp.launch(
+            compute_rewards,
+            dim=self.num_envs,
+            inputs=[
+                wp.from_torch(self.is_blue),
+                self._step_blue_goals,
+                self._step_red_goals,
+                self._step_ball_pos,
+                self._step_ball_vel,
+                self.blue_goal_wp,
+                self.red_goal_wp,
+                self._step_oob,
+                self.blue_rod_pos,
+                self.red_rod_pos,
+                self._step_blue_players,
+                self._step_red_players,
+                self.goal_reward,
+                self.oob_penalty,
+            ],
+            outputs=[self.rewards],
+        )
+        self._reset(self._step_dones)
+        wp.launch(
+            invert_sides,
+            dim=self.num_envs,
+            inputs=[wp.from_torch(self.is_blue)],
+            outputs=[self._step_is_red],
+        )
+        wp.launch(
+            compute_observations,
+            dim=(self.num_envs, 38),
+            inputs=[
+                self.data_d.qpos,
+                self.data_d.qvel,
+                self.data_d.xpos,
+                self._step_is_red,
+                wp.from_torch(self.blue_goal_center),
+                wp.from_torch(self.red_goal_center),
+                self.ball_id,
+                int(self.ball_qvel_adr),
+            ],
+            outputs=[self._step_observations],
+        )
+
     def _reset(self, dones: torch.Tensor | None = None):
-        # update the seed so that we can a new random number each time the kernel is launched
-        # Might need something more robust?
-        self.seed += 1
-
-        if dones is None:
-            env_idx = slice(None)
-            self.is_blue[env_idx] = torch.randint(0, 2, size=(self.num_envs,), dtype=torch.int8, device=self.device) == 0
-            size = self.num_envs
-        else:
-            size = int(dones.sum().item())
-            self.is_blue[dones] = torch.randint(0, 2, size=(size,), dtype=torch.int8, device=self.device) == 0
-            mjw.reset_data(self.model_d, self.data_d, reset=wp.from_torch(dones))
-            env_idx = torch.where(dones)[0].to(torch.int32)
-
-        if self.always_blue:
-            self.is_blue[env_idx] = True
-
-        # must propagate changes in the position so the geoms are updated by relative position
-        mjw.forward(self.model_d, self.data_d)
-
-        if self.lesson == "kick":
-            # spawn the ball in the line of a kicker pole
-            out_ball_positions = self.data_d.qpos
-            ball_id = wp.int32(self.ball_qpos_adr)
-            side_wp = wp.from_torch(self.is_blue, dtype=wp.bool)
-
-            if env_idx == slice(None):
-                env_wp = wp.array([i for i in range(size)], dtype=wp.int32)
-            else:
-                env_wp = wp.array(env_idx, dtype=wp.int32)
-
-            wp.launch(set_random_ball_position_to_player, dim=(size, ),
-                inputs=[
-                    env_wp,
-                    ball_id,
-                    self.seed,
-                    wp.uint32(self.step_count),
-                    side_wp,
-                    self.ball_line_start,
-                    self.ball_line_length,
-                ],
-                outputs=[
-                    out_ball_positions
-                ]
-            )
-
-        elif self.lesson == "final":
-            qpos = wp.to_torch(self.data_d.qpos)
-            qvel = wp.to_torch(self.data_d.qvel)
-            ball_vel = qvel[:, 16:19]
-
-            # always throw to blue
-            bias = 1.0 if self.bias_to_blue else 0.0
-
-            ball_vel[env_idx, 0] = (torch.rand(size, device=self.device) + bias)
-            ball_vel[env_idx, 1] = -torch.rand(size, device=self.device) * 2.0
-
-            # randomize ball starting position so the fooseball learns to kick right
-            qpos[env_idx, 16:17] += ((torch.rand((size, 1), device=self.device) -  0.5) * 2.0) * 0.4 # from +- 0.4
-            qpos[env_idx, 17:18] += ((torch.rand((size, 1), device=self.device) -  0.5) * 2.0) * 0.3 # from +- 0.3
-
-        else:
+        if self.lesson not in ("kick", "final"):
             raise RuntimeError(f"Lesson {self.lesson} not defined.")
+        mask = self._all_reset if dones is None else dones
+        mask_wp = wp.from_torch(mask) if isinstance(mask, torch.Tensor) else mask
+        wp.launch(
+            advance_reset_seed,
+            dim=1,
+            inputs=[mask_wp],
+            outputs=[wp.from_torch(self.reset_seed)],
+        )
+        if dones is not None:
+            mjw.reset_data(self.model_d, self.data_d, reset=mask_wp)
+        wp.launch(
+            prepare_resets,
+            dim=self.num_envs,
+            inputs=[mask_wp, wp.from_torch(self.reset_seed), self.always_blue],
+            outputs=[wp.from_torch(self.is_blue), wp.from_torch(self.episode_length_buf)],
+        )
 
-        # The kick lesson will place on  the "initial" positions, but afterwards we will randomize the pole
-        # positions, maybe not ideal since we still need to learn how to get to the ball and not just kick
-        # forward
-        qpos = wp.to_torch(self.data_d.qpos)
-        joint_ranges = wp.to_torch(self.model_d.jnt_range)[0, :16, :]
-        min_range = joint_ranges[:, 0]
-        max_range = joint_ranges[:, 1]
-        joint_positions = torch.rand((size, 16), device=self.device) * (max_range - min_range) + min_range
-        qpos[env_idx, :16] = joint_positions
+        # Preserve the existing full forward passes around reset randomization.
+        self._forward()
+        wp.launch(
+            randomize_resets,
+            dim=self.num_envs,
+            inputs=[
+                mask_wp,
+                wp.from_torch(self.reset_seed),
+                wp.from_torch(self.is_blue),
+                self.lesson == "kick",
+                self.bias_to_blue,
+                int(self.ball_qpos_adr),
+                int(self.ball_qvel_adr),
+                self.ball_line_start,
+                self.ball_line_length,
+                self.model_d.jnt_range,
+            ],
+            outputs=[self.data_d.qpos, self.data_d.qvel],
+        )
+        self._forward()
 
-        # Need to propagate the changes in in positions
-        mjw.forward(self.model_d, self.data_d)
+    def _forward(self):
+        if self._building_step_graph or self.forward_graph is None or not self.use_cuda_graph:
+            mjw.forward(self.model_d, self.data_d)
+        else:
+            wp.capture_launch(self.forward_graph)
 
     def get_sim_data(self):
         wp.synchronize()

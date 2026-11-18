@@ -3,6 +3,7 @@ import os
 import torch
 from torch.profiler import profile, ProfilerActivity
 from rsl_rl.runners import OnPolicyRunner
+from rl_integration import LocalOnPolicyRunner
 from env import FoosballEnv
 import argparse
 import policy_cfg
@@ -13,6 +14,8 @@ parser.add_argument("--device", type=str, help="Device str", default='cuda:0')
 parser.add_argument("--iter", type=int, help="Number of iterations", default=3)
 parser.add_argument("--op", action='store_true', help="Use the runner policy as an opponent", default=None)
 parser.add_argument("--profile", action="store_true", help="Run in profiling mode")
+parser.add_argument("--no-cuda-graph", action="store_true", help="Disable CUDA graph replay for comparison")
+parser.add_argument("--stock-runner", action="store_true", help="Use upstream RSL-RL diagnostics and reporting")
 parser.add_argument("--trace_file", type=str, help="Output trace file name", default="foosball_trace.json")
 args_cli = parser.parse_args()
 
@@ -25,10 +28,19 @@ if __name__ == "__main__":
     env_count = 256 if args_cli.profile else 4096
 
     # Initialize the environment
-    env = FoosballEnv(num_envs=env_count, dt=1.0/60.0, device=device, model="model.xml", always_blue=True, bias_to_blue=True)
+    env = FoosballEnv(
+        num_envs=env_count,
+        dt=1.0/60.0,
+        device=device,
+        model="model.xml",
+        always_blue=True,
+        bias_to_blue=True,
+        use_cuda_graph=not args_cli.no_cuda_graph,
+    )
 
     # Initialize the runner
-    runner = OnPolicyRunner(env, copy.deepcopy(policy_cfg.train_cfg), log_dir="./logs/", device=device)
+    runner_class = OnPolicyRunner if args_cli.stock_runner else LocalOnPolicyRunner
+    runner = runner_class(env, copy.deepcopy(policy_cfg.train_cfg), log_dir="./logs/", device=device)
     if args_cli.chpt:
         runner.load(args_cli.chpt, map_location=device)
 
