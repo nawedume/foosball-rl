@@ -437,8 +437,8 @@ class FoosballEnv(VecEnv):
             outputs=[wp.from_torch(self.is_blue), wp.from_torch(self.episode_length_buf)],
         )
 
-        # Preserve the existing full forward passes around reset randomization.
-        self._forward()
+        # Randomization reads only primary state and model constants.
+        # Refresh derived state once, after writing the randomized state.
         wp.launch(
             randomize_resets,
             dim=self.num_envs,
