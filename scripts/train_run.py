@@ -15,7 +15,6 @@ import numpy as np
 import torch
 import warp as wp
 from rsl_rl.runners import OnPolicyRunner
-from rl_integration import LocalOnPolicyRunner
 
 from env import FoosballEnv
 from policy_cfg import train_cfg
@@ -143,7 +142,6 @@ def main():
     parser.add_argument("--opponent-checkpoint", type=Path)
     parser.add_argument("--training-seconds", type=float)
     parser.add_argument("--no-cuda-graph", action="store_true")
-    parser.add_argument("--stock-runner", action="store_true")
     args = parser.parse_args()
     if min(args.iterations, args.num_envs, args.save_interval,
            args.eval_interval, args.eval_envs, args.max_hours) <= 0:
@@ -171,8 +169,7 @@ def main():
     env = FoosballEnv(num_envs=args.num_envs, dt=1.0 / 60.0, device=device,
                       always_blue=True, bias_to_blue=True, seed=args.seed,
                       use_cuda_graph=not args.no_cuda_graph)
-    runner_class = OnPolicyRunner if args.stock_runner else LocalOnPolicyRunner
-    runner = runner_class(env, cfg, log_dir=str(output / "checkpoints"), device=device)
+    runner = OnPolicyRunner(env, cfg, log_dir=str(output / "checkpoints"), device=device)
     if args.resume:
         resume_info = runner.load(str(args.resume), map_location=device) or {}
         if "completed_iterations" in resume_info:
